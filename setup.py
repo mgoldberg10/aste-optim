@@ -19,7 +19,7 @@ setup(
             'xmitgcm',
             'ecco_v4_py',
             'xgcm',
-            'gcmfaces_py',
+            'gcmfacespy',
             ],
         tests_require=['pytest>=2.8']
 )

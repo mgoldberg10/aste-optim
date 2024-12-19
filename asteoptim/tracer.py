@@ -1,8 +1,8 @@
 import xarray as xr
 import numpy as np
 import dask.array as da
-from gcmfaces_py import convert2widefaces
-from ecco_v4_py.llc_array_conversion import llc_tiles_to_faces
+from gcmfacespy import convert2widefaces
+from ecco_v4_py.llc_array_conversion import llc_tiles_to_faces, llc_faces_to_tiles
 
 
 @xr.register_dataarray_accessor('at')
@@ -74,12 +74,15 @@ def get_aste_tracer_xr(data_array):
         coords=f23.coords
     )
 
+
     # Concatenate the empty array and f23 along 'I' axis
     fe23 = xr.concat([empty, f23], dim='I')
     fe23 = fe23.reset_index('I', drop=True)
+    fe23 = fe23.assign_coords(J=fe23['J'])
 
-    # Final concatenation along 'J' axis
-    aste_tracer = xr.concat([f50, f41, fe23], dim='J')
+    ## Final concatenation along 'J' axis
+    tracer_das = [f50, f41, fe23]
+    aste_tracer = xr.concat(tracer_das, dim='J')
     aste_tracer = aste_tracer.reset_index('J', drop=True)
 
     return aste_tracer
@@ -278,7 +281,7 @@ def aste_compact_to_global270(v0, mygrid, less_output=True, return_faces=True):
     v00 = v0.reshape(n3 * n4 * n5, n1 * n2)
     i0 = 0
     i1 = 0
-    v1 = []
+    v1 = dict()
     c = 0
 
     for iFace in range(nFaces):
@@ -287,19 +290,60 @@ def aste_compact_to_global270(v0, mygrid, less_output=True, return_faces=True):
         i1 = i1 + nn * mm
         this_v1 = v00[:,i0:i1].reshape(n3, mm, nn, n4, n5)
         this_v1 = this_v1.transpose(2, 1, 0, 3, 4)
-        v1.append(this_v1)
-
+        v1[iFace+1] = this_v1
     v1 = convert2widefaces(v1, mygrid)
 
     for iFace in range(nFaces):
-        v1[iFace] = np.squeeze(v1[iFace])
-        tpose_shape = (v1[iFace].ndim == 3) * (2,) + (1, 0)
-        v1[iFace] = v1[iFace].transpose(tpose_shape)
+        v1[iFace+1] = np.squeeze(v1[iFace+1])
+        tpose_shape = (v1[iFace+1].ndim == 3) * (2,) + (1, 0)
+        v1[iFace+1] = v1[iFace+1].transpose(tpose_shape)
 
-    array = dict(zip(range(1, 6), v1))
-    array_tiles = llc_faces_to_tiles(array, less_output=less_output)
+    array_tiles = llc_faces_to_tiles(v1, less_output=less_output)
 
     if return_faces:
-        return array
+        return v1
     else:
         return array_tiles
+
+def get_aste_faces(fld,nfx=[270, 0, 270, 180, 450],nfy=[450, 0, 270, 270, 270]):
+    '''
+    From big ASTE, get the data on the individual faces from the ASTE grid in case we want to observe individually
+    input fld (of shape from rdmds reshaped to ny,nx or nz,ny,nx)
+    '''
+    nx=nfx[0]
+    
+    #check the klevel dimension, if 2d, add a third dim
+    sz=np.shape(fld)
+    sz=np.array(sz)
+    if(len(sz)<3):
+        fld=np.copy(fld[np.newaxis,:,:])
+    
+    tmp = fld[:,0:nfy[0],0:nx]
+    fldout = dict()
+    fldout[1]=fld[:,0:nfy[0],0:nx]                    #face 1
+    fldout[3]=fld[:,nfy[0]:nfy[0]+nfy[2],0:nx]        ##face 3
+    fldout[2]=np.array([])
+    fldout[4]=np.reshape(fld[:,nfy[0]+nfy[2]:nfy[0]+nfy[2]+nfx[3],0:nx],[-1,nx,nfx[3]]) ##face 4
+    fldout[5]=np.reshape(fld[:,nfy[0]+nfy[2]+nfx[3]:nfy[0]+nfy[2]+nfx[3]+nfx[4],0:nx],[-1,nx,nfx[4]]) ##face 5
+    return fldout
+
+def plot_aste_faces(fld,klev,climit,step, nfx=[270, 0, 270, 180, 450],nfy=[450, 0, 270, 270, 270]):
+    '''
+    Plots faces 1-4 of the ASTE grid, 
+    input
+        fld: must be from rdmds do not edit or reshape this
+    '''
+    fldout=get_aste_faces(fld,nfx,nfy=[450, 0, 270, 270, 270])
+    nx=nfx[0]
+    #step=(climit[1]-climit[0])/100
+    print(step)
+    clevels = np.arange(climit[0], climit[1], step)
+    fig,axs=plt.subplots(2,2)
+    pcm=axs[0,0].contourf(fldout.f1[klev-1,:,:],levels=clevels, cmap='viridis')
+    fig.colorbar(pcm,ax=axs[0,0],location='right')
+    axs[0,0].title.set_text('fld face1')
+    pcm=axs[0,1].contourf(fldout.f3[klev-1,:,:],levels=clevels,cmap='viridis')
+    fig.colorbar(pcm,ax=axs[0,1],location='right')
+    axs[0,1].title.set_text('fld face3')
+    pcm=axs[1,0].contourf(fldout.f4[klev-1,:,:],levels=clevels,cmap='viridis')
+    fig.colorbar(pcm,ax=axs[1,0],location='right')

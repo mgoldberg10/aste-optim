@@ -1,7 +1,7 @@
-from gcmfaces_py import gcmfaces, calc_barostream, convert2array
+from gcmfacespy import gcmfaces, calc_barostream, convert2array
 import numpy as np
 from asteoptim.tracer import *
-from ecco_v4_py.llc_array_conversion import llc_tiles_to_faces
+from ecco_v4_py.llc_array_conversion import llc_tiles_to_faces, llc_faces_to_tiles
 import xarray as xr
 
 class AsteGrid:
@@ -20,21 +20,21 @@ class AsteGrid:
 class AsteBarostream:
     def __init__(self,
             aste_ds,
-            grid_dir,
             aste_grid = AsteGrid(),
             nx = 270,
+            domain = 'aste',
             ):
 
         self.aste_ds = aste_ds
-        self.grid_dir = grid_dir
         self.aste_grid = aste_grid
         self.nx = self.aste_grid.nx
+        self.domain = domain
 
 
     def add_to_mygrid(self, grid_fld_list=['XC', 'YC', 'dxC', 'dyC', 'hFacC']):
         for grid_fld in grid_fld_list:
             print(grid_fld)          
-            gf = self.ds[grid_fld].compute()
+            gf = self.aste_ds[grid_fld].compute()
 
             if grid_fld == 'hFacC':
                 gf = gf.where(gf != 0.)
@@ -43,16 +43,24 @@ class AsteBarostream:
             else:
                 grid_fld = grid_fld.upper()
                 
-            gf = llc_tiles_to_faces(gf.values, less_output=True)
+            if self.domain == 'ecco':
+                gf = llc_tiles_to_faces(gf.values, less_output=True)
+            elif self.domain == 'aste':
+                gf = aste_tracer2compact(gf.at().values)
+                gf = aste_compact_to_global270(gf, self.aste_grid, return_faces=True)
+                if grid_fld == 'mskC0':
+                    for iF in gf:
+                        gf[iF][gf[iF] == 0.] = np.nan
+
             gf = {iF: gf[iF].T for iF in gf}
             gf = gcmfaces(gf)
             setattr(self.aste_grid, grid_fld, gf)
 
     def get_maskWS(self):
-        for suffix in ['W', 'S', 'C']:
+        for suffix in ['W', 'S']:
             self.aste_ds[f'mask{suffix}'] = np.ceil(self.aste_ds[f'hFac{suffix}'])
 
-    def calc_one_barostream(self, ioptim, time, domain='aste'):
+    def calc_one_barostream(self, ioptim, time, domain='aste', noDiv=False):
         ds_tmp = self.aste_ds.isel(ioptim=ioptim, time=time)
 
         if ('maskW' not in ds_tmp.coords) or ('maskS' not in ds_tmp.coords):
@@ -64,45 +72,52 @@ class AsteBarostream:
         fldV = fldV.where(fldV != 0., other=np.nan)
 
 
-        if domain == 'aste': # replace with rebuild_llc_facets
+        if self.domain == 'aste': # replace with rebuild_llc_facets
 
-            def get_aste_faces(fld):
-                from xmitgcm.utils import rebuild_llc_facets, get_extra_metadata
-                aste_extra_metadata = get_extra_metadata(domain='aste', nx=self.aste_grid.nx)
-                fld = rebuild_llc_facets(fld.rename({'tile': 'face'}), extra_metadata=aste_extra_metadata)
-                from pdb import set_trace;set_trace()
-                
-                fld_dict = {iF+1: fld[facet_key].values for iF, facet_key in enumerate(fld)}
+            #def get_aste_faces(fld):
+            #    from xmitgcm.utils import rebuild_llc_facets, get_extra_metadata
+            #    aste_extra_metadata = get_extra_metadata(domain='aste', nx=self.aste_grid.nx)
+            #    fld = rebuild_llc_facets(fld.rename({'tile': 'face'}), extra_metadata=aste_extra_metadata)
+            #    
+            #    from pdb import set_trace;set_trace()
+            #    fld_dict = {iF+1: fld[facet_key].values for iF, facet_key in enumerate(fld)}
 
-                return fld_dict
-            fldU = get_aste_faces(fldU)
-            fldV = get_aste_faces(fldV)
-            # fldU_compact = aste_tracer2compact(fldU.at().values)
-            # fldV_compact = aste_tracer2compact(fldV.at().values)
-            # # inputs to aste_compact_to_global270 need to have a singleton dimension
-            # fldU = aste_compact_to_global270(fldU_compact, self.aste_grid, return_faces=True)
-            # fldV = aste_compact_to_global270(fldV_compact, self.aste_grid, return_faces=True)
+            #    return fld_dict
+            #fldU = get_aste_faces(fldU)
+            #fldV = get_aste_faces(fldV)
+            fldU_compact = aste_tracer2compact(fldU.at().values)
+            fldV_compact = aste_tracer2compact(fldV.at().values)
+            # inputs to aste_compact_to_global270 need to have a singleton dimension
+            fldU = aste_compact_to_global270(fldU_compact, self.aste_grid, return_faces=True)
+            fldV = aste_compact_to_global270(fldV_compact, self.aste_grid, return_faces=True)
 
-        elif domain == 'ecco':
+        elif self.domain == 'ecco':
             fldU = llc_tiles_to_faces(fldU.values, less_output=True)
             fldV = llc_tiles_to_faces(fldV.values, less_output=True)
 
         fldU = {iF: fldU[iF].T for iF in fldU}
         fldV = {iF: fldV[iF].T for iF in fldV}
 
-        psi = calc_barostream(fldU, fldV, self.aste_grid, noDiv=False)
-        psi = np.squeeze(convert2array(psi, self.aste_grid)).T
+        psi = calc_barostream(fldU, fldV, self.aste_grid, noDiv=noDiv)
 
-        return psi
+        if self.domain == 'aste':
+            psi = np.squeeze(convert2array(psi, self.aste_grid)).T
+            psis_tracer = xr.DataArray(aste_global2tracer(psi), dims=['J','I'])
+            psi_tiles = get_aste_tracer_xr_inv(psis_tracer).values
+        elif self.domain == 'ecco':
+            psi = {iF: psi[iF].T for iF in psi}
+            psi_tiles = llc_faces_to_tiles(psi, less_output=True)
 
-    def calc_barostreams(self):
+        return psi_tiles
 
-        nx_glob = self.nx * 4
+    def calc_barostreams(self, noDiv=False):
+
         opts = self.aste_ds.ioptim.values
         nopt = len(opts)
         nt = len(self.aste_ds.time)
+        ntile = len(self.aste_ds.tile)
 
-        psis = np.empty((nopt, nt, nx_glob, nx_glob))
+        psis = np.empty((nopt, nt, ntile, self.nx, self.nx))
 
         # antithesis of xarray right here
         print('Computing barostream for all (optim, time)\n')
@@ -110,10 +125,6 @@ class AsteBarostream:
         for ioptim in range(nopt):
             for time in range(nt):
                 print(f'{ioptim},{time} ', end='')
-                psis[ioptim, time, :, :] = self.calc_one_barostream(ioptim=ioptim, time=time)
+                psis[ioptim, time, :, :, :] = self.calc_one_barostream(ioptim=ioptim, time=time, noDiv=noDiv)
 
-            
-        psis_tracer = xr.DataArray(aste_global2tracer(psis), dims=['ioptim','time','J','I'])
-        psis_da = get_aste_tracer_xr_inv(psis_tracer)
-        self.aste_ds['psi'] = xr.DataArray(psis_da.values, dims=psis_tracer.dims)
-
+        self.aste_ds['psi'] = xr.DataArray(psis, dims=['ioptim', 'time', 'tile', 'j', 'i'])
