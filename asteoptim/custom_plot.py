@@ -1,7 +1,7 @@
 from .plot import *
 import cmocean
 
-def plot_aste_rdbu(ds, da, ax, title='', cbar_xlabel='', **am_kwargs):
+def plot_aste_rdbu(ds, da, ax, title='', **am_kwargs):
 #    fig, axes = aste_orthographic(subplot_n=1, subplot_m=1)
     am = aste_map(ds)
     nlev = 21
@@ -11,13 +11,11 @@ def plot_aste_rdbu(ds, da, ax, title='', cbar_xlabel='', **am_kwargs):
     vmax = am_kwargs.pop('vmax', 1)
 
     levels = np.linspace(vmin, vmax, nlev+1)
-
-    cbar_ticks_params = dict(labelsize=14)
     cbar_ticks = np.linspace(vmin, vmax, 5)
     ax, cb, _,_,_ = am(da,
                        ax=ax,
                        do_pcolor=False, 
-                       cbar_ticks_params = cbar_ticks_params,
+                       cbar_ticks_params = dict(labelsize=14),
                        cmap=cmap,
                        vmin=vmin,
                        vmax=vmax,
@@ -27,8 +25,7 @@ def plot_aste_rdbu(ds, da, ax, title='', cbar_xlabel='', **am_kwargs):
                     )
     cb.set_ticks(cbar_ticks)
     cb.extend='both'
-    cb.ax.set_xlabel(cbar_xlabel, fontsize=20)
-    ax.set_title(title, fontsize=30, pad=20)
+    ax.set_title(title, fontsize=20, pad=16)
     return ax, cb
 
 def plot_before_after_diff_rdbu(
@@ -40,6 +37,7 @@ def plot_before_after_diff_rdbu(
                               am_kwargs = {},
                               plot_type='at',
                               scale_factor = 0.1,
+                              suptitle = '',
                           ):
     # da provided should correspond to a fixed time,
     # i.e. should have spatial dimensions and ioptim dimension
@@ -59,9 +57,11 @@ def plot_before_after_diff_rdbu(
       fig, axes = aste_orthographic(subplot_n=1, subplot_m=3)
       for ida, (da, ax, title) in enumerate(zip(das, axes, titles)):
           if ida == 2:
-              am_kwargs['vmin']=int(scale_factor * am_kwargs['vmin'])
-              am_kwargs['vmax']=int(scale_factor * am_kwargs['vmax'])
+              am_kwargs['vmin']=scale_factor * am_kwargs['vmin']
+              am_kwargs['vmax']=scale_factor * am_kwargs['vmax']
           ax, cb = plot_aste_rdbu(ds, da, ax, title, **am_kwargs)
+          if abs(am_kwargs['vmax'])*abs(am_kwargs['vmin']) < 1:
+              cb.ax.set_xticklabels([f'{i:.1f}' for i in cb.get_ticks()])
     elif plot_type == 'at': # aste tracer view 
       fig, axes = plt.subplots(1, 3)
       for ida, (da, ax, title) in enumerate(zip(das, axes, titles)):
@@ -72,7 +72,11 @@ def plot_before_after_diff_rdbu(
           ax = plot_aste_tracer_rdbu(da_at, ax, title, **am_kwargs)
     else: 
         ValueError(f'Unsupported plot_type \'{plot_type}\'')
-    return fig, ax
+    
+    fig.suptitle(suptitle, fontsize=30, y=1.)
+    fig.set_size_inches(12, 4)
+    fig.tight_layout()
+    return fig, axes
 
 def plot_aste_tracer_rdbu(da, ax, title='', **am_kwargs):
     kwargs = get_rdbu_plot_defaults(am_kwargs=am_kwargs)

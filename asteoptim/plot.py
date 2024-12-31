@@ -230,12 +230,12 @@ class aste_map:
             cb = plt.colorbar(
                 pl,
                 ax=ax,
-                shrink=0.6,
+                shrink=0.8,
                 orientation="horizontal",
                 pad=0.1,
-                label=cbar_label,
                 **cbar_kwargs
             )
+            cb.set_label(cbar_label)
             cb.ax.tick_params(**cbar_ticks_params)
         else:
             cb = None
@@ -453,7 +453,7 @@ def aste_orthographic(subplot_n = 1,
 
     # Handle the case when there is only one subplot
     if subplot_n == 1 and subplot_m == 1:
-        axes = [axes]  # Make axes a list for consistency in further processing
+        axes = np.array([axes])  # Make axes an array for consistency in further processing
 
     aoi = mpath.Path(
         list(zip(np.linspace(xmin,xmax, n), np.full(n,ymax))) + \
@@ -461,7 +461,8 @@ def aste_orthographic(subplot_n = 1,
         list(zip(np.linspace(xmax,xmin, n), np.full(n,ymin))) + \
         list(zip(np.full(n,xmin), np.linspace(ymin,ymax, n)))
     )
-    for ax in axes:    
+#    from pdb import set_trace;set_trace()
+    for ax in axes.ravel():    
         ax.set_boundary(aoi, transform=ccrs.PlateCarree())
         
         # Colored Land Background

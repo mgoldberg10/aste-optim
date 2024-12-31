@@ -38,6 +38,7 @@ def compute_spg(ds,
                 new_grid_delta_lat = 1,
                 new_grid_delta_lon = 1,
                 SPG_mask = None,
+                remove_clim = False,
   ):
 
   da_etan = ds.ETAN.sel(time=tslice)
@@ -79,19 +80,15 @@ def compute_spg(ds,
   
   etan_anom = dsll.ETAN - dsll.ETAN.mean('time')
 
-  all_months_have_two = (etan_anom.groupby('time.month')
-                         .count('time')  # Count number of time entries per group
-                         .min() >= 2)    # Check if the minimum count is at least 2
-  
   # subset to SPG region
   etan_anom = etan_anom.where(SPG_mask)
   
-  all_months_have_two = (etan_anom.groupby('time.month')
-                         .count('time')  # Count number of time entries per group
-                         .min() >= 2)    # Check if the minimum count is at least 2
+#  all_months_have_two = (etan_anom.groupby('time.month')
+#                         .count('time')  # Count number of time entries per group
+#                         .min() >= 2)    # Check if the minimum count is at least 2
   
   
-  if all_months_have_two: # multiple year's worth of data    
+  if remove_clim:
       climatology = etan_anom.groupby('time.month').mean(dim='time')
       deseasonalized_etan_anom = etan_anom.groupby('time.month') - climatology
       deseasonalized_etan_anom_yr = deseasonalized_etan_anom.groupby('time.year').mean(dim='time')

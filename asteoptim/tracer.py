@@ -48,6 +48,7 @@ def get_aste_tracer_xr(data_array):
     # Process f1 and f4
     f1 = data_array.isel({'tile': 1})
     f4 = data_array.isel({'tile': 4}).transpose(*extra_dims, i_dim, j_dim).isel({i_dim: slice(None, None, -1)})
+    f1 = assign_coords_to_dataarray(f1, i_dim, j_dim)
     f4 = assign_coords_to_dataarray(f4, i_dim, j_dim)
 
     # Concatenate f4 and f1 along 'I' axis
