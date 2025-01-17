@@ -474,11 +474,12 @@ def aste_orthographic(subplot_n = 1,
         # Set gridlines to variable so you can manipulate them
         gl = ax.gridlines(draw_labels=True,crs=ccrs.PlateCarree(),x_inline=False,y_inline=False, linestyle=':')
         gl.xlocator = mticker.FixedLocator([-100, -80, -60, -40, -20, 0, 20])
-        gl.ylocator = mticker.FixedLocator(range(0, 90, 10))
+        gl.ylocator = mticker.FixedLocator(range(0, 90, 20))
         gl.xformatter = LONGITUDE_FORMATTER
         gl.yformatter = LATITUDE_FORMATTER
         gl.ylabels_right = False
-        gl.xlabels_top = False
+        gl.top_labels = False
+        # can't figure out how to hide right latitude lines. See https://stackoverflow.com/questions/75597673/hide-right-side-axis-latitude-labels-for-high-latitude-non-rectangular-project
 
     if subplot_n == 1 and subplot_m == 1:
         axes = axes[0]

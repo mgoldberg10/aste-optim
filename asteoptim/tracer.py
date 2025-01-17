@@ -348,3 +348,64 @@ def plot_aste_faces(fld,klev,climit,step, nfx=[270, 0, 270, 180, 450],nfy=[450, 
     axs[0,1].title.set_text('fld face3')
     pcm=axs[1,0].contourf(fldout.f4[klev-1,:,:],levels=clevels,cmap='viridis')
     fig.colorbar(pcm,ax=axs[1,0],location='right')
+
+def get_aste_tracer(fldin,nfx=[270, 0, 270, 180, 450],nfy=[450, 0, 270, 270, 270]):
+    '''
+    Inputs:
+        fldin: data field in compact coords from mitgcm output (of shape from rdmds reshaped to ny,nx or nz,ny,nx)
+        nfx: number of x faces, nfx = np.array([nx, 0 , nx, ncut2 ,ncut1])
+        nfy: number of y faces, nfy = np.array([ncut1, 0 , nx, nx, nx])
+
+    outputs:
+        the input field reshaped into tracer form, plottable in xyz space
+
+    '''
+    
+    sz=np.shape(fldin)
+    sz=np.array(sz)
+    if(len(sz)<3):
+       sz=np.append(1,sz)
+    
+    nz=sz[0]
+    nx=sz[-1]
+
+    
+    #add a new dimension in case it's only 2d field:
+    if nz == 1:
+        fldin=fldin[np.newaxis, :, :]
+    #defining a big face:
+    a = np.full((nz, nfy[0]+nx+nfx[3], 2*nx), np.nan)
+    
+    #face1
+    tmp=fldin[:,0:nfy[0],0:nx]        #(50,450,270)
+    a[:,0:nfy[0],nx:2*nx]=tmp
+    # return a
+    
+    #face3
+    tmp=fldin[:,nfy[0]:nfy[0]+nx,0:nx] #(50, 270,270)
+    tmp=np.transpose(tmp, (1,2,0))     #(270,270,50)
+    ##syntax to rotate cw:
+    tmp1=list(zip(*tmp[::-1]))         #type is <class 'zip'> --> <class 'list'>
+    tmp1=np.transpose(tmp1,[2,0,1])    #(50,270,270)
+    a[:,nfy[0]:nfy[0]+nx,nx:2*nx]=tmp1
+    
+    #face4
+    tmp=np.reshape(fldin[:,nfy[0]+nx:nfy[0]+nx+nfx[3],0:nx],[nz,nx,nfx[3]]) #(50,270,180)
+    tmp=np.transpose(tmp, (1,2,0))
+    #syntax to rotate cw:
+    tmp1=list(zip(*tmp[::-1]))      #type is <class 'list'>
+    tmp1=np.asarray(tmp1)           #type <class 'numpy.ndarray'>, shape (180,270,50)
+    tmp1=np.transpose(tmp1,[2,0,1]) #(50,180,270)
+    a[:,nfy[0]+nx:nfy[0]+nx+nfx[3],nx:2*nx]=tmp1
+    
+    #face5
+    tmp=np.reshape(fldin[:,nfy[0]+nx+nfx[3]:nfy[0]+nx+nfx[3]+nfx[4],0:nx],[nz,nx,nfx[4]]) #(50,270,450)
+    tmp=np.transpose(tmp, (1,2,0))
+    #syntax to rotate ccw:
+    tmp1=list(zip(*tmp))[::-1]      #type is <class 'zip'> --> <class 'list'>
+    tmp1=np.asarray(tmp1)           #type <class 'numpy.ndarray'>, shape (450,270,50)
+    tmp1=np.transpose(tmp1,[2,0,1]) #(50,450,270)
+    a[:,0:nfx[4],0:nx]=tmp1
+    
+    return a
+
