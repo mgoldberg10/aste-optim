@@ -1,8 +1,9 @@
 from .plot import *
 import cmocean
 
-def plot_aste_rdbu(ds, da, ax, title='', **am_kwargs):
-#    fig, axes = aste_orthographic(subplot_n=1, subplot_m=1)
+def plot_aste_rdbu(ds, da, fig=None, ax=None, title='', **am_kwargs):
+    if ax is None:
+        fig, ax = aste_orthographic(subplot_n=1, subplot_m=1)
     am = aste_map(ds)
     nlev = 21
     cmap = cmocean.cm.balance
@@ -26,7 +27,7 @@ def plot_aste_rdbu(ds, da, ax, title='', **am_kwargs):
     cb.set_ticks(cbar_ticks)
     cb.extend='both'
     ax.set_title(title, fontsize=20, pad=16)
-    return ax, cb
+    return fig, ax, cb
 
 def plot_before_after_diff_rdbu(
                               ds,
