@@ -6,12 +6,14 @@ def plot_aste_rdbu(ds, da, fig=None, ax=None, title='', **am_kwargs):
         fig, ax = aste_orthographic(subplot_n=1, subplot_m=1)
     am = aste_map(ds)
     nlev = 21
-    cmap = cmocean.cm.balance
+    cmap = am_kwargs.pop('cmap', cmocean.cm.balance)
    
     vmin = am_kwargs.pop('vmin', -1)
     vmax = am_kwargs.pop('vmax', 1)
 
-    levels = np.linspace(vmin, vmax, nlev+1)
+    levels = am_kwargs.pop('levels', np.linspace(vmin, vmax, nlev+1))
+    extend = am_kwargs.pop('extend', 'both')
+
     cbar_ticks = np.linspace(vmin, vmax, 5)
     ax, cb, _,_,_ = am(da,
                        ax=ax,
@@ -21,11 +23,11 @@ def plot_aste_rdbu(ds, da, fig=None, ax=None, title='', **am_kwargs):
                        vmin=vmin,
                        vmax=vmax,
                        levels=levels,
-                       extend='both',
+                       extend=extend,
                        **am_kwargs
                     )
     cb.set_ticks(cbar_ticks)
-    cb.extend='both'
+#    cb.extend='both'
     ax.set_title(title, fontsize=20, pad=16)
     return fig, ax, cb
 
