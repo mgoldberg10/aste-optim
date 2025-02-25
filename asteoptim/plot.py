@@ -11,17 +11,36 @@ from cartopy.mpl.gridliner import LONGITUDE_FORMATTER, LATITUDE_FORMATTER
 import matplotlib.ticker as mticker
 import matplotlib.path as mpath
 import matplotlib.colors as mcolors
+from smartcables.cmap_utils import *
+import xarray as xr
 
-#def create_white_centered_colormap(num_levels, factor=10):
-#    colors = plt.cm.RdBu_r(np.linspace(0, 1, num_levels + 1))
-#    mid_index = num_levels // 2
-#    white_range = max(1, num_levels // factor)  # Adjust this factor for more/less white centered values
-#
-#    for i in range(mid_index - white_range, mid_index + white_range + 1):
-#        if i < len(colors):
-#            colors[i] = [1, 1, 1, 1]  # Set to white
-#
-#    return mcolors.LinearSegmentedColormap.from_list("white_centered", colors, N=num_levels)
+@xr.register_dataset_accessor('c')
+class GeoAccessor:
+    def __init__(self, xarray_obj):
+        self._obj = xarray_obj
+
+    def ploto(self, da, **am_kwargs):
+        fig, ax, cb = plot_orthographic(self._obj, da, **am_kwargs)
+        return fig, ax, cb
+
+    def plotpc(self, da, **am_kwargs):
+        fig, ax, cb = plot_platecarree(self._obj, da, **am_kwargs)
+        return fig, ax, cb
+
+#    def __call__(self):
+#        return get_cartopy_plot(self._obj)
+
+def plot_orthographic(ds, da, **am_kwargs):
+    fig, ax = aste_orthographic()
+    am = aste_map(ds)
+    ax, cb, _, _, _ = am(da, ax=ax, **am_kwargs)
+    return fig, ax, cb
+
+def plot_platecarree(ds, da, **am_kwargs):
+    fig, ax = plt.subplots(1,1,subplot_kw=dict(projection=ccrs.PlateCarree()))
+    am = aste_map(ds)
+    ax, cb, _, _, _ = am(da, ax=ax, **am_kwargs)
+    return fig, ax, cb
 
 
 def get_xy_coords(xda):
@@ -477,7 +496,7 @@ def aste_orthographic(subplot_n = 1,
         gl.ylocator = mticker.FixedLocator(range(0, 90, 20))
         gl.xformatter = LONGITUDE_FORMATTER
         gl.yformatter = LATITUDE_FORMATTER
-        gl.ylabels_right = False
+#        gl.ylabels_right = False
         gl.top_labels = False
         # can't figure out how to hide right latitude lines. See https://stackoverflow.com/questions/75597673/hide-right-side-axis-latitude-labels-for-high-latitude-non-rectangular-project
 

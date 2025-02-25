@@ -26,7 +26,8 @@ def plot_aste_rdbu(ds, da, fig=None, ax=None, title='', **am_kwargs):
                        extend=extend,
                        **am_kwargs
                     )
-    cb.set_ticks(cbar_ticks)
+    if cb is not None:
+        cb.set_ticks(cbar_ticks)
 #    cb.extend='both'
     ax.set_title(title, fontsize=20, pad=16)
     return fig, ax, cb
