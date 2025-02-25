@@ -4,6 +4,7 @@ from .dataset import open_astedataset
 
 # First pass being written to only consider 2d time varying controls
 
+def l2norm(x):return np.sqrt(np.nansum(np.square(x)))
 
 class SensitivityVector():
     def __init__(
@@ -14,6 +15,7 @@ class SensitivityVector():
         ctrl_weights = [],
         nx = 270,
         subset_time = slice(None, None),
+        obs_weights = None,
     ):
         self.run_dir = run_dir
         self.grid_dir = grid_dir if grid_dir is not None else self.run_dir
@@ -23,10 +25,13 @@ class SensitivityVector():
         self.nx = nx
         self.extra_metadata = xmitgcm.utils.get_extra_metadata(domain='aste', nx=self.nx)
         self.subset_time = subset_time
+ 
+        if obs_weights is None:
+          self.obs_weights = np.array([1.])
         
-        self.load_datasets()
+        self.load_sensitivities()
 
-    def load_datasets(self):
+    def load_sensitivities(self):
         iternum = 0 # feels like an okay assumption for dpp experiments -- no assimilation, just sensitivity
         # load dataset, just the grid
         self.ds = open_astedataset(self.run_dir, nx=self.nx, grid_dir=self.grid_dir)
@@ -39,13 +44,74 @@ class SensitivityVector():
 
         self.ds = self.ds.isel(time=self.subset_time)
 
-    def compute_hessian_eigenvectors(self, obs_weights):
+    def normalize(self):
+        data_vars = [var for var in self.ds.data_vars if var.startswith('adxx_')]
+        q = xr.concat([self.ds[var].mean('time').where(self.ds.hFacC[0]) for var in data_vars], dim='ictrl')
+        q = q.stack(z=('ictrl', ) + self.ds.XC.dims)  # Stack over ictrl and spatial dims
+        q /= np.sqrt((q**2).sum())
+        for var, q_norm in zip(data_vars, q.unstack('z')):
+            self.ds[var] = q_norm
+
+
+class DPP():
+    def __init__(
+        self,
+        qoi_run_dir,
+        obs_run_dirs,
+        verbose = True,
+        grid_dir = None, 
+        ctrl_vars = [],
+        ctrl_weights = [],
+        nx = 270,
+        subset_time = slice(None, None),
+        obs_weights = None,
+    ):
+
+        # set attributes
+        self.qoi_run_dir = qoi_run_dir
+        self.obs_run_dirs = obs_run_dirs
+        self.verbose = verbose
+
+        self.grid_dir = grid_dir if grid_dir is not None else self.run_dir
+        self.ctrl_vars = ctrl_vars
+        self.adxx_vars = [f'adxx_{cv}' for cv in self.ctrl_vars]
+        self.ctrl_weights = ctrl_weights
+        self.nx = nx
+        self.subset_time = subset_time
+        self.extra_metadata = xmitgcm.utils.get_extra_metadata(domain='aste', nx=self.nx)
+
+        if obs_weights is None:
+          self.obs_weights = np.ones(len(obs_run_dirs)) 
+
+        # load qoi and obs datasets         
+        self.get_datasets()
+
+        # compute DPP
+        self.compute_dpp(verbose=self.verbose)
+
+    def get_datasets(self):
+        qoi = SensitivityVector(self.qoi_run_dir, grid_dir=self.grid_dir, ctrl_vars=self.ctrl_vars, ctrl_weights = self.ctrl_weights, nx=self.nx, subset_time=self.subset_time)
+        qoi.normalize()
+
+        obs_ds_list = []
+
+        for obs_run_dir, obs_weight in zip(self.obs_run_dirs, self.obs_weights):
+            obs = SensitivityVector(obs_run_dir, grid_dir=self.grid_dir, ctrl_vars=self.ctrl_vars, ctrl_weights = self.ctrl_weights, nx=self.nx, subset_time=self.subset_time)
+            obs_ds_list.append(obs.ds)
+        obs_ds = xr.concat(obs_ds_list, dim='iobs')
+        setattr(obs, 'ds', obs_ds)
+        obs = self.compute_hessian_eigenvectors(obs)
+
+        self.ds = obs.ds
+        for adxx_var in self.adxx_vars:
+            self.ds[f'qoi_{adxx_var}'] = qoi.ds[adxx_var]
+
+    def compute_hessian_eigenvectors(self, obs):
         """
         Compute the orthonormal eigenvectors of the (Gauss-Newton approximation of the) Hessian matrix.
     
         Parameters:
             A (numpy.ndarray): Array containing gradients of size nx*ny for each of M observations for each of N controls. Shape is [M, N, nx*ny].
-            obs_weights (numpy.ndarray): Array containing observation weights. Length is M.
     
         Returns:
             QV (numpy.ndarray): Array containing orthonormal eigenvectors of size nx*ny for each observation and control.
@@ -60,19 +126,16 @@ class SensitivityVector():
             eigenvectors are obtained by multiplying Q and V, where Q is the orthogonal matrix from the QR decomposition
             and V contains the eigenvectors. The resulting array QV is reshaped to size (M, N, nx*ny) and returned.
         """
-
-        self.obs_weights = obs_weights
-
+        
         N, M = (len(self.ctrl_vars), len(self.obs_weights))
-        ntile, nx, ny  = self.ds.XC.shape
+        ntile, nx, ny  = obs.ds.XC.shape
         ngrid = ntile*nx*ny
 
         A = np.zeros((M, N, ntile*nx*ny))
 
         for iobs in range(M):
             for ictrl, adxx_var in enumerate(self.adxx_vars):
-                A[iobs, ictrl, :] = self.ds[adxx_var].mean('time').values.ravel()
-
+                A[iobs, ictrl, :] = obs.ds.isel(iobs=iobs)[adxx_var].mean('time').values.ravel()
         
         A = A.reshape(A.shape[:-2] + (-1,)).T
         Q, R = np.linalg.qr(A)
@@ -88,40 +151,40 @@ class SensitivityVector():
         QV = np.matmul(Q, V)
         QV = np.transpose(QV.reshape(N, ngrid, M), [2, 0, 1])
 
-        for iobs in range(len(self.obs_weights)):
-            for ictrl, adxx_var in enumerate(self.adxx_vars):
-                self.ds[f'qv_{adxx_var}'] = xr.DataArray(QV[iobs, ictrl, :].reshape(self.ds.XC.shape), dims=self.ds.XC.dims)
+        dims = ('iobs', ) + obs.ds.XC.dims
+        shape = (M, ) + obs.ds.XC.shape
 
-class DPP():
-    def __init__(
-        self,
-        sv_qoi,
-        sv_obs,
-        verbose = True
-    ):
-        self.sv_qoi = sv_qoi
-        self.sv_obs = sv_obs
-        self.verbose = verbose
-         
-        self.compute_dpp(verbose=self.verbose)
+        for ictrl, adxx_var in enumerate(self.adxx_vars):
+            obs.ds[f'qv_{adxx_var}'] = xr.DataArray(QV[:, ictrl, :].reshape(shape), dims=dims)
+        return obs
 
     def compute_dpp(self, verbose=True):
         # need to concat all adxx_vars, hard coded rn
-        mask = self.sv_qoi.ds.hFacC.isel(k=0)
-        
-        q = xr.concat(
-            [self.sv_qoi.ds.adxx_uwind.mean('time').where(mask), 
-             self.sv_qoi.ds.adxx_vwind.mean('time').where(mask)], 
-            dim='ictrl'
-        ).stack(z=('ictrl', ) + self.sv_qoi.ds.XC.dims)  # Stack only over ictrl and spatial dims
-        q /= np.sqrt((q**2).sum())
-        
-        v1 = xr.concat(
-            [self.sv_obs.ds.qv_adxx_uwind.where(mask), 
-             self.sv_obs.ds.qv_adxx_vwind.where(mask)], 
-            dim='ictrl'
-        ).stack(z=('ictrl', ) + self.sv_qoi.ds.XC.dims)
-        
+        mask = self.ds.hFacC[0]
+
+        # stack obs_vars -- already has iobs dimension
+        obs_vars = [var for var in self.ds.data_vars if var.startswith('qv')]
+        v1 = xr.concat([self.ds[var].where(self.ds.hFacC[0]) for var in obs_vars], dim='ictrl')
+        v1 = v1.stack(z=('ictrl', ) + mask.dims)
+
+        # stack qoi_vars -- needs to be tiled iobs times
+        qoi_vars = [var for var in self.ds.data_vars if var.startswith('qoi')]
+        q = xr.concat([self.ds[var].where(self.ds.hFacC[0]) for var in qoi_vars], dim='ictrl')
+        q = q.stack(z=('ictrl', ) + mask.dims)
+       
+        # tile q iobs times
+        q = q.expand_dims(iobs=len(v1.iobs))
+        q = q.transpose('z', 'iobs').values.reshape(-1)
+        q = xr.DataArray(q, dims='z')
+
+        # flatten v1
+        v1 = v1.transpose('z', 'iobs').values.reshape(-1)
+        v1 = xr.DataArray(v1, dims='z')
+
+        # I think it works like so: since the qv vectors are ON, we just repeat 
+        # q M times... do we need to renormalize q after repeating?
+        # Dont think we do...as long as q and v_i are ON, we're good
+
         dpp_val = (v1 * q).sum()**2
         if verbose:
             print(f'dpp = {1e2*dpp_val.values:.2f}%')

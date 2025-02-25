@@ -23,8 +23,8 @@ class GeoAccessor:
         fig, ax, cb = plot_orthographic(self._obj, da, **am_kwargs)
         return fig, ax, cb
 
-    def plotpc(self, da, **am_kwargs):
-        fig, ax, cb = plot_platecarree(self._obj, da, **am_kwargs)
+    def plotpc(self, da, am_init_kwargs=dict(), **am_kwargs):
+        fig, ax, cb = plot_platecarree(self._obj, da, am_init_kwargs=am_init_kwargs, **am_kwargs)
         return fig, ax, cb
 
 #    def __call__(self):
@@ -36,9 +36,12 @@ def plot_orthographic(ds, da, **am_kwargs):
     ax, cb, _, _, _ = am(da, ax=ax, **am_kwargs)
     return fig, ax, cb
 
-def plot_platecarree(ds, da, **am_kwargs):
-    fig, ax = plt.subplots(1,1,subplot_kw=dict(projection=ccrs.PlateCarree()))
-    am = aste_map(ds)
+def plot_platecarree(ds, da, am_init_kwargs=dict(), **am_kwargs):
+    ax = am_kwargs.pop('ax', None)
+    fig = None if ax else plt.figure(figsize=(8, 6))
+    ax = ax or plt.axes(projection=ccrs.PlateCarree())
+
+    am = aste_map(ds, **am_init_kwargs)
     ax, cb, _, _, _ = am(da, ax=ax, **am_kwargs)
     return fig, ax, cb
 
@@ -94,7 +97,7 @@ class aste_map:
         figsize=(6, 6),
         show_cbar=True,
         cbar_label=None,
-        do_pcolor=True,
+        plot_type='pcolormesh',
         addLand=True,
         addBathyContours=False,
         addQuiver=False,
@@ -145,7 +148,7 @@ class aste_map:
         levels = np.linspace(vmin, vmax, 10)
         levels = plt_kwargs.pop('levels', levels)
         
-        if do_pcolor:
+        if plot_type == 'pcolormesh':
             pl = ax.pcolormesh(
                 x[:, :split_lon_idx],
                 y[:, :split_lon_idx],
@@ -165,10 +168,10 @@ class aste_map:
                 vmin=vmin,
                 cmap=cmap,
                 transform=ccrs.PlateCarree(),
-                zorder=2,
+                zorder=1,
                 **plt_kwargs,
             )
-        else: # contourf
+        elif plot_type == 'contourf':
             pl = ax.contourf(
                 x[:, :split_lon_idx],
                 y[:, :split_lon_idx],
@@ -190,9 +193,34 @@ class aste_map:
                 cmap=cmap,
                 levels=levels,
                 transform=ccrs.PlateCarree(),
-                zorder=2,
+                zorder=1,
                 **plt_kwargs,
             )
+        elif plot_type == 'contour':
+#            from pdb import set_trace;set_trace()
+            pl = ax.contour(
+                x[:, :split_lon_idx],
+                y[:, :split_lon_idx],
+                field[:, :split_lon_idx],
+                transform=ccrs.PlateCarree(),
+                levels=levels,
+                zorder=1,
+                **plt_kwargs,
+            )
+            pr = ax.contour(
+                x[:, split_lon_idx:],
+                y[:, split_lon_idx:],
+                field[:, split_lon_idx:],
+                transform=ccrs.PlateCarree(),
+                levels=levels,
+                zorder=1,
+                **plt_kwargs,
+            )
+        elif plot_type is None:
+            pl = pr = None
+            pass 
+        else:
+            ValueError('Please provide valid plot_type, such as \'pcolormesh\', \'contour\', or \'contourf\'')
 
         if addBathyContours:
             field = self.regrid(self.ds.Depth.where(self.ds.hFacC[0]))
