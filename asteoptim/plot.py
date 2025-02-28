@@ -24,11 +24,8 @@ class GeoAccessor:
         return fig, ax, cb
 
     def plotpc(self, da, am_init_kwargs=dict(), **am_kwargs):
-        fig, ax, cb = plot_platecarree(self._obj, da, am_init_kwargs=am_init_kwargs, **am_kwargs)
-        return fig, ax, cb
-
-#    def __call__(self):
-#        return get_cartopy_plot(self._obj)
+        fig, ax, cb, p = plot_platecarree(self._obj, da, am_init_kwargs=am_init_kwargs, **am_kwargs)
+        return fig, ax, cb, p
 
 def plot_orthographic(ds, da, **am_kwargs):
     fig, ax = aste_orthographic()
@@ -42,8 +39,8 @@ def plot_platecarree(ds, da, am_init_kwargs=dict(), **am_kwargs):
     ax = ax or plt.axes(projection=ccrs.PlateCarree())
 
     am = aste_map(ds, **am_init_kwargs)
-    ax, cb, _, _, _ = am(da, ax=ax, **am_kwargs)
-    return fig, ax, cb
+    ax, cb, p, _, _ = am(da, ax=ax, **am_kwargs)
+    return fig, ax, cb, p
 
 
 def get_xy_coords(xda):
