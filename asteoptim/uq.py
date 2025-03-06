@@ -8,6 +8,16 @@ from .plot import aste_orthographic
 
 def l2norm(x):return np.sqrt(np.nansum(np.square(x)))
 
+def mycos(a, b):
+    dims = ('ictrl', 'tile', 'j', 'i')
+    dot_product = (a * b).sum(dim=dims)
+    a_norm = np.sqrt((a**2).sum(dim=dims))
+    b_norm = np.sqrt((b**2).sum(dim=dims))
+    cos_angle = dot_product / (a_norm * b_norm)
+    angle_radians = np.arccos(np.clip(cos_angle, -1.0, 1.0))
+    angle_degrees = np.degrees(angle_radians).values
+    return angle_degrees
+
 class SensitivityVector():
     def __init__(
         self,
@@ -130,21 +140,21 @@ class SensitivityVector():
         
         A = A.reshape(A.shape[:-2] + (-1,)).T
         Q, R = np.linalg.qr(A)
-#        sign_correction = np.sign(np.sum(A * Q, axis=0))  # Ensures alignment with A
-#        Q *= sign_correction  # Apply sign correction to Q
-#        R *= sign_correction[:, np.newaxis] 
-    
         E = np.zeros((M, M))
-        
+
         # observational noise, not the same as uncertainty!
         for m in range(M):
 #            E[m, m] = self.obs_weights[m]**2
             E[m, m] = 1
         
-        lhs = np.dot(np.dot(R, np.linalg.inv(E)), R.T)
+        lhs = R @ np.linalg.inv(E) @ R.T
         D, V = np.linalg.eig(lhs)
-        
-        QV = np.matmul(Q, V)
+        lhs_reconstr = V @ np.diag(D) @ np.linalg.inv(V)
+        assert np.allclose(lhs, lhs_reconstr, atol=1e-6)
+        QV = Q @ V
+        # ON check
+        assert np.allclose(QV.T @ QV, np.eye(QV.shape[1]), atol=1e-6)
+
         QV = np.transpose(QV.reshape(N, ngrid, M), [2, 0, 1])
 
         dims = ('iobs', ) + self.ds.XC.dims
@@ -202,30 +212,18 @@ class DPP():
     def get_datasets(self):
         qoi = SensitivityVector(self.qoi_run_dir, grid_dir=self.grid_dir, ctrl_vars=self.ctrl_vars, ctrl_weights = self.ctrl_weights, obs_weights = self.qoi_weight, nx=self.nx, subset_time=self.subset_time)
 
-        # divide by qoi uncertainty
-#        qoi._vars_operate(lambda q: q / qoi.obs_weights)
-        # multiply by ctrl uncertainty
-#        qoi._vars_operate(lambda q: q / self.ctrl_weights) # need to make this work with list of ctrl_weights
-        
-        # multiply out uncertainty in qoi/obs
         qoi.normalize()
 
         obs_ds_list = []
 
         for obs_run_dir, obs_weight in zip(self.obs_run_dirs, self.obs_weights):
             obs = SensitivityVector(obs_run_dir, grid_dir=self.grid_dir, ctrl_vars=self.ctrl_vars, ctrl_weights = self.ctrl_weights, obs_weights=np.array([obs_weight]), nx=self.nx, subset_time=self.subset_time)
-            obs.normalize()
-#            obs._vars_operate(lambda q: q / obs_weight)
             obs_ds_list.append(obs.ds)
         obs_ds = xr.concat(obs_ds_list, dim='iobs')
         setattr(obs, 'ds', obs_ds)
         setattr(obs, 'obs_weights', self.obs_weights)
 
-        if len(self.obs_weights) > 1: 
-            obs.compute_hessian_eigenvectors()
-        else:
-            for adxx_var in obs.adxx_vars:
-                obs.ds[f'qv_{adxx_var}'] = obs.ds[adxx_var]
+        obs.compute_hessian_eigenvectors()
 
         self.ds = obs.ds
         for adxx_var in self.adxx_vars:
@@ -236,13 +234,11 @@ class DPP():
         self.qoi = qoi
 
     def compute_dpp(self, verbose=True):
-        # need to concat all adxx_vars, hard coded rn
         mask = self.ds.hFacC[0]
 
         # stack obs_vars -- already has iobs dimension
         obs_vars = [var for var in self.ds.data_vars if var.startswith('qv')]
         v1 = xr.concat([self.ds[var].where(self.ds.hFacC[0]) for var in obs_vars], dim='ictrl')
-        v1 = v1.stack(z=('iobs', 'ictrl', ) + mask.dims)
 
         # stack qoi_vars -- needs to be tiled iobs times
         qoi_vars = [var for var in self.ds.data_vars if var.startswith('qoi')]
@@ -250,24 +246,38 @@ class DPP():
        
         if 'iobs' not in q.dims:
             q = q.expand_dims(iobs=self.nobs)
-        q = q.stack(z=('iobs', 'ictrl', ) + mask.dims)
+        q = q.transpose(*v1.dims)
 
-        # I think it works like so: since the qv vectors are ON, we just repeat 
-        # q M times... do we need to renormalize q after repeating?
-        # Dont think we do...as long as q and v_i are ON, we're good
+        dims_to_sum = tuple(dim for dim in v1.dims if dim != "iobs")
+        dpp_obs = (q * v1).sum(dim=dims_to_sum)**2  # Sum over all but 'iobs'
+         
+        dpp_tot = dpp_obs.sum(dim="iobs")
 
-        dpp_val = (v1 * q).sum()**2
-        if verbose:
-            print(f'dpp = {1e2*dpp_val.values:.2f}%')
-        self.dpp_val = dpp_val
+        self.dpp_obs = dpp_obs.values
+        self.dpp_tot = dpp_tot.values
         self.v1 = v1
         self.q = q
+
+        if verbose:
+            dpp_percent = [f"{1e2 * dpp.values:.0f}%" for dpp in dpp_obs]
+            print(" + ".join(f"dpp{i}" for i in range(len(dpp_obs))) + " = " +
+                  " + ".join(dpp_percent) + f" = {1e2*self.dpp_tot:.0f}%")
+
+
+    def get_angles(self, verbose=True):
+        dims = ('ictrl', 'tile', 'j', 'i')
+        self.angles_degrees = mycos(self.q, self.v1)
+        if verbose:
+            angles_degrees = [f"{angle:.0f}°" for angle in self.angles_degrees]
+            angle_str = " + ".join([f"theta{i}" for i in range(len(angles_degrees))]) + " = "
+            angle_values_str = " + ".join(angles_degrees)
+            print(f"{angle_str}{angle_values_str}")
 
     def plot(self, iobs=0, dotprod_fac=100, maskC_fname=None, ao_kwargs={}):
         das = []
         for var in self.adxx_vars:
             qoi = getattr(self.ds, f'qoi_{var}').where(self.ds.hFacC[0])
-            qv = getattr(self.ds, f'qv_{var}')[0].where(self.ds.hFacC[0])
+            qv = getattr(self.ds, f'qv_{var}')[iobs].where(self.ds.hFacC[0])
             dotprod = qoi * qv
             das.extend([qoi, qv, dotprod])
         
@@ -319,6 +329,6 @@ class DPP():
         cbar_ax.tick_params(size=20, labelsize=40)
         fig.subplots_adjust(wspace=-0.8)  # Reduce horizontal spacing
         fig.tight_layout()
-        fig.suptitle(f'DPP={100 * self.dpp_val.values:.2f}%', fontsize=100, y=1.1)
+        fig.suptitle(f'DPP={100 * self.dpp_obs[iobs]:.2f}%', fontsize=100, y=1.1)
         return fig, ax
 
