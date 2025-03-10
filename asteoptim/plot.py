@@ -11,7 +11,7 @@ from cartopy.mpl.gridliner import LONGITUDE_FORMATTER, LATITUDE_FORMATTER
 import matplotlib.ticker as mticker
 import matplotlib.path as mpath
 import matplotlib.colors as mcolors
-from smartcables.cmap_utils import *
+from smartcables.smart_cmaps import *
 import xarray as xr
 
 @xr.register_dataset_accessor('c')
