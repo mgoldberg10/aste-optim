@@ -3,6 +3,30 @@ from xmitgcm.utils import get_extra_metadata
 import numpy as np
 import xarray as xr
 import glob
+import functools
+
+# custom routine to properly load aste1080, which is formatted differently from other aste models
+original_get_extra_metadata = get_extra_metadata  
+
+def override_get_extra_metadata(func):
+    @functools.wraps(func)
+    def wrapper(domain='aste', nx=None):
+        if nx == 1080:
+            return get_extra_metadata_aste1080()
+        return func(domain, nx)
+    return wrapper
+
+def get_extra_metadata_aste1080():
+    em = get_extra_metadata(domain='aste', nx=270)
+    em['ny'] = 4140
+    em['nx'] = 1080
+    em['ny_facets'] = [1260, 0, 1080, 540, 1260]
+    em['pad_before_y'] = [int(1080/3)+270+270, 0, 0, 0, 0]
+    em['pad_after_y'] = [0, 0, 0, int(1080/3)+270, 1080]
+    return em
+
+# Apply override
+get_extra_metadata = override_get_extra_metadata(get_extra_metadata)
 
 default_openmdsdataset_kwargs = {
             'iters': None,

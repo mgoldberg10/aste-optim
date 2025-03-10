@@ -349,17 +349,22 @@ def plot_aste_faces(fld,klev,climit,step, nfx=[270, 0, 270, 180, 450],nfy=[450, 
     pcm=axs[1,0].contourf(fldout.f4[klev-1,:,:],levels=clevels,cmap='viridis')
     fig.colorbar(pcm,ax=axs[1,0],location='right')
 
-def get_aste_tracer(fldin,nfx=[270, 0, 270, 180, 450],nfy=[450, 0, 270, 270, 270]):
+#def get_aste_tracer(fldin,nfx=[270, 0, 270, 180, 450],nfy=[450, 0, 270, 270, 270]):
+def get_aste_tracer(fldin,nx=270):
     '''
     Inputs:
         fldin: data field in compact coords from mitgcm output (of shape from rdmds reshaped to ny,nx or nz,ny,nx)
-        nfx: number of x faces, nfx = np.array([nx, 0 , nx, ncut2 ,ncut1])
-        nfy: number of y faces, nfy = np.array([ncut1, 0 , nx, nx, nx])
+        nx: number of points in model llc grid spanning a quarter circumference at the equator
 
     outputs:
         the input field reshaped into tracer form, plottable in xyz space
 
     '''
+    
+#    nfx: number of x faces, nfx = np.array([nx, 0 , nx, ncut2 ,ncut1])
+#    nfy: number of y faces, nfy = np.array([ncut1, 0 , nx, nx, nx])
+    nfx = [nx, 0, nx, int(2*nx/3), int(5*nx/3)]
+    nfy = [int(5*nx/3), 0, nx, nx, nx]
     
     sz=np.shape(fldin)
     sz=np.array(sz)
