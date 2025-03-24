@@ -1,9 +1,11 @@
 from smartcables import *
 
 def load_gentim2d_ds(run_dir, ctrl_vars, optim_iters=range(1, 2), thresh=1e5):
+    # note: thresh is by no means a foolproof way to do this -- can't think of a better way to determine which xx_gentim2d records correspond to a given run
+    # The other way is that the user could supply modelStart and modelEnd dates and gentim2d periods
     
     ds = xr.Dataset()
-    for ctrl_var in ctrl_vars:
+    for ic, ctrl_var in enumerate(ctrl_vars):
         # load adxx(iternum=0) just to get recs
         iternum = 0
         xx_var = f'adxx_{ctrl_var}'
@@ -11,7 +13,6 @@ def load_gentim2d_ds(run_dir, ctrl_vars, optim_iters=range(1, 2), thresh=1e5):
         meta = get_aste_file_metadata(xx_fname, iternum=iternum, dtype=np.dtype('>f4'))
         xx = read_3d_llc_data(xx_var, meta)
         recs = np.where(abs(xx.mean(axis=(1,2,3))) > thresh)[0]
-        from pdb import set_trace;set_trace();
 
         # load xx1
         xx_list = []

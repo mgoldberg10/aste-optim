@@ -13,6 +13,7 @@ import matplotlib.path as mpath
 import matplotlib.colors as mcolors
 from smartcables.smart_cmaps import *
 import xarray as xr
+import copy
 
 @xr.register_dataset_accessor('c')
 class GeoAccessor:
@@ -144,6 +145,8 @@ class aste_map:
         )
         levels = np.linspace(vmin, vmax, 10)
         levels = plt_kwargs.pop('levels', levels)
+
+        transform_first = plt_kwargs.pop('transform_first', True)
         
         if plot_type == 'pcolormesh':
             pl = ax.pcolormesh(
@@ -179,6 +182,8 @@ class aste_map:
                 levels=levels,
                 transform=ccrs.PlateCarree(),
                 zorder=1,
+                transform_first=True,
+                extend='both',
                 **plt_kwargs,
             )
             pr = ax.contourf(
@@ -191,10 +196,11 @@ class aste_map:
                 levels=levels,
                 transform=ccrs.PlateCarree(),
                 zorder=1,
+                transform_first=True,
+                extend='both',
                 **plt_kwargs,
             )
         elif plot_type == 'contour':
-#            from pdb import set_trace;set_trace()
             pl = ax.contour(
                 x[:, :split_lon_idx],
                 y[:, :split_lon_idx],
@@ -249,17 +255,6 @@ class aste_map:
         # Add land and coastlines
         if addLand:
             ax.add_feature(cf.LAND.with_scale("50m"), facecolor='0.75',zorder=3)
-        #ax.add_feature(cf.COASTLINE.with_scale("50m"), zorder=3)
-
-#        # Add gridlines
-#        ax.gridlines(
-#            crs=ccrs.PlateCarree(),
-##            draw_labels=True if projection == ccrs.Mercator() else False,
-#            linewidth=2,
-#            color="gray",
-#            alpha=0.5,
-#            linestyle="-",
-#        )
 
         # Add label from attributes
         if cbar_label is None:
@@ -271,16 +266,30 @@ class aste_map:
 
         # Colorbar...
         if show_cbar:
+            cbar_kwargs = copy.deepcopy(cbar_kwargs)
+
+            # Ensure vmin and vmax exist in cbar_kwargs or extract from the plotted data
+            vmin = cbar_kwargs.get("vmin", pl.norm.vmin)
+            vmax = cbar_kwargs.get("vmax", pl.norm.vmax)
+            pad = cbar_kwargs.pop("pad", 0.1)
+            default_ticks = np.linspace(vmin, vmax, 5)
+            cbar_kwargs.setdefault("ticks", default_ticks)
+
+            if "ticks" not in cbar_kwargs:
+                cbar_kwargs["ticks"] = default_ticks
+        
+
             cb = plt.colorbar(
                 pl,
                 ax=ax,
                 shrink=0.8,
                 orientation="horizontal",
-                pad=0.1,
+                pad=pad,
                 **cbar_kwargs
             )
             cb.set_label(cbar_label)
             cb.ax.tick_params(**cbar_ticks_params)
+            cb.set_ticklabels([f"{t:.2f}" for t in cbar_kwargs["ticks"]])
         else:
             cb = None
         return ax, cb, pl, pr, split_lon_idx
@@ -488,11 +497,13 @@ def aste_orthographic(subplot_n = 1,
                       xmax = 30,
                       ymin = 0,
                       ymax = 80,
-                      n = 20):
+                      n = 20,
+                      figsize = None):
     # https://stackoverflow.com/questions/75586978/cartopy-labels-not-appearing-for-high-latitude-non-rectangular-projection/75587005#75587005
     # Create a figure with n rows and m columns of subplots
-
-    fig, axes = plt.subplots(subplot_n, subplot_m, figsize=(10 * subplot_m, 6 * subplot_n), 
+    if figsize is None:
+        figsize = (10 * subplot_m, 6 * subplot_n)
+    fig, axes = plt.subplots(subplot_n, subplot_m, figsize=figsize, 
                              subplot_kw={'projection': ccrs.Mollweide(central_longitude=(xmin + xmax) / 2)})
 
     # Handle the case when there is only one subplot
@@ -505,7 +516,6 @@ def aste_orthographic(subplot_n = 1,
         list(zip(np.linspace(xmax,xmin, n), np.full(n,ymin))) + \
         list(zip(np.full(n,xmin), np.linspace(ymin,ymax, n)))
     )
-#    from pdb import set_trace;set_trace()
     for ax in axes.ravel():    
         ax.set_boundary(aoi, transform=ccrs.PlateCarree())
         
@@ -513,7 +523,7 @@ def aste_orthographic(subplot_n = 1,
         land = cf.NaturalEarthFeature('physical','land',scale='110m',facecolor='silver',lw=1,linestyle='--')
         ax.add_feature(land)
         
-        ax.set_extent([xmin,xmax,ymin,ymax],crs=ccrs.PlateCarree())
+        ax.set_extent([xmin,xmax,0,90],crs=ccrs.PlateCarree())
     
         # Set gridlines to variable so you can manipulate them
         gl = ax.gridlines(draw_labels=True,crs=ccrs.PlateCarree(),x_inline=False,y_inline=False, linestyle=':')
