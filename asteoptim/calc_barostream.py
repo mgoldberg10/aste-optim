@@ -23,15 +23,19 @@ class AsteBarostream:
             aste_grid = AsteGrid(),
             nx = 270,
             domain = 'aste',
+            noDiv = False
             ):
 
         self.aste_ds = aste_ds
         self.aste_grid = aste_grid
         self.nx = self.aste_grid.nx
         self.domain = domain
+        self.noDiv = noDiv
 
 
-    def add_to_mygrid(self, grid_fld_list=['XC', 'YC', 'dxC', 'dyC', 'hFacC']):
+    def add_to_mygrid(self, grid_fld_list=['XC', 'YC', 'hFacC']):
+        if self.noDiv:
+            grid_fld_list += ['dxC', 'dyC']
         for grid_fld in grid_fld_list:
             print(grid_fld)          
             gf = self.aste_ds[grid_fld].compute()
@@ -60,31 +64,27 @@ class AsteBarostream:
         for suffix in ['W', 'S']:
             self.aste_ds[f'mask{suffix}'] = np.ceil(self.aste_ds[f'hFac{suffix}'])
 
-    def calc_one_barostream(self, ioptim, time, domain='aste', noDiv=False):
+    def calc_one_barostream(self, ioptim, time, domain='aste'):
         ds_tmp = self.aste_ds.isel(ioptim=ioptim, time=time)
 
         if ('maskW' not in ds_tmp.coords) or ('maskS' not in ds_tmp.coords):
             self.get_maskWS()
 
-        fldU = ((ds_tmp.UVELMASS * ds_tmp.dyG * ds_tmp.drF).sum(axis=0) * ds_tmp.maskW[0])
+        # adding special logic for llc4320 fields, which are constructed ahead of time
+        if 'fldU' not in ds_tmp.data_vars.keys():
+            fldU = ((ds_tmp.UVELMASS * ds_tmp.dyG * ds_tmp.drF).sum(axis=0) * ds_tmp.maskW[0])
+        else:
+            fldU = ds_tmp.fldU
+        if 'fldV' not in ds_tmp.data_vars.keys():
+            fldV = ((ds_tmp.VVELMASS * ds_tmp.dxG * ds_tmp.drF).sum(axis=0) * ds_tmp.maskS[0])
+        else:
+            fldV = ds_tmp.fldV
+
         fldU = fldU.where(fldU != 0., other=np.nan)
-        fldV = ((ds_tmp.VVELMASS * ds_tmp.dxG * ds_tmp.drF).sum(axis=0) * ds_tmp.maskS[0])
         fldV = fldV.where(fldV != 0., other=np.nan)
 
 
         if self.domain == 'aste': # replace with rebuild_llc_facets
-
-            #def get_aste_faces(fld):
-            #    from xmitgcm.utils import rebuild_llc_facets, get_extra_metadata
-            #    aste_extra_metadata = get_extra_metadata(domain='aste', nx=self.aste_grid.nx)
-            #    fld = rebuild_llc_facets(fld.rename({'tile': 'face'}), extra_metadata=aste_extra_metadata)
-            #    
-            #    from pdb import set_trace;set_trace()
-            #    fld_dict = {iF+1: fld[facet_key].values for iF, facet_key in enumerate(fld)}
-
-            #    return fld_dict
-            #fldU = get_aste_faces(fldU)
-            #fldV = get_aste_faces(fldV)
             fldU_compact = aste_tracer2compact(fldU.at().values)
             fldV_compact = aste_tracer2compact(fldV.at().values)
             # inputs to aste_compact_to_global270 need to have a singleton dimension
@@ -98,7 +98,7 @@ class AsteBarostream:
         fldU = {iF: fldU[iF].T for iF in fldU}
         fldV = {iF: fldV[iF].T for iF in fldV}
 
-        psi = calc_barostream(fldU, fldV, self.aste_grid, noDiv=noDiv)
+        psi = calc_barostream(fldU, fldV, self.aste_grid, noDiv=self.noDiv)
 
         if self.domain == 'aste':
             psi = np.squeeze(convert2array(psi, self.aste_grid)).T
@@ -110,7 +110,7 @@ class AsteBarostream:
 
         return psi_tiles
 
-    def calc_barostreams(self, noDiv=False):
+    def calc_barostreams(self):
 
         opts = self.aste_ds.ioptim.values
         nopt = len(opts)
@@ -125,6 +125,6 @@ class AsteBarostream:
         for ioptim in range(nopt):
             for time in range(nt):
                 print(f'{ioptim},{time} ', end='')
-                psis[ioptim, time, :, :, :] = self.calc_one_barostream(ioptim=ioptim, time=time, noDiv=noDiv)
+                psis[ioptim, time, :, :, :] = self.calc_one_barostream(ioptim=ioptim, time=time)
 
         self.aste_ds['psi'] = xr.DataArray(psis, dims=['ioptim', 'time', 'tile', 'j', 'i'])
