@@ -34,8 +34,12 @@ default_openmdsdataset_kwargs = {
             'geometry': 'llc',
             'default_dtype': np.float32
         }
+default_grid_dir = '/work/08381/goldberg/ls6/aste_270x450x180/GRID_noblank_real4/'
 
-def open_astedataset(data_dir, nx=270, face_to_tile=True, **open_mdsdataset_kwargs):
+def open_astedataset(data_dir=None,
+                     nx=270,
+                     face_to_tile=True,
+                     **open_mdsdataset_kwargs):
     """
     Wrapper function to open an xmitgc aste domain dataset.
     
@@ -58,6 +62,10 @@ def open_astedataset(data_dir, nx=270, face_to_tile=True, **open_mdsdataset_kwar
     
     if 'prefix' in open_mdsdataset_kwargs.keys() and open_mdsdataset_kwargs['iters'] is None:
         open_mdsdataset_kwargs.pop('iters')
+
+    if data_dir is None:
+        print('data_dir not provided. Loading default grid dataset')
+        data_dir = default_grid_dir
     
     ds = open_mdsdataset(data_dir, **open_mdsdataset_kwargs)
     

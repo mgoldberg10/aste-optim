@@ -106,13 +106,13 @@ class aste_map:
         quiver_kwargs={},
         cbar_kwargs={},
         cbar_ticks_params={},
+        lon_0 = 80,
         **plt_kwargs,
     ):
 
         if addStreamlines and addQuiver:
             assert (not (addStreamlines and addQuiver)), 'cannot do both quiver and streamlines'
 
-        lon_0 = -100
 
         tiledim = "tile" if "face" not in da.dims else "face"
         allowed_dims = {"i", "j", "i_g", "j_g"}
@@ -157,7 +157,7 @@ class aste_map:
                 vmin=vmin,
                 cmap=cmap,
                 transform=ccrs.PlateCarree(),
-                zorder=1,
+                zorder=0,
                 **plt_kwargs,
             )
             pr = ax.pcolormesh(
@@ -168,7 +168,7 @@ class aste_map:
                 vmin=vmin,
                 cmap=cmap,
                 transform=ccrs.PlateCarree(),
-                zorder=1,
+                zorder=0,
                 **plt_kwargs,
             )
         elif plot_type == 'contourf':
@@ -181,7 +181,7 @@ class aste_map:
                 cmap=cmap,
                 levels=levels,
                 transform=ccrs.PlateCarree(),
-                zorder=1,
+                zorder=0,
                 transform_first=True,
                 extend='both',
                 **plt_kwargs,
@@ -195,7 +195,7 @@ class aste_map:
                 cmap=cmap,
                 levels=levels,
                 transform=ccrs.PlateCarree(),
-                zorder=1,
+                zorder=0,
                 transform_first=True,
                 extend='both',
                 **plt_kwargs,
@@ -207,7 +207,7 @@ class aste_map:
                 field[:, :split_lon_idx],
                 transform=ccrs.PlateCarree(),
                 levels=levels,
-                zorder=1,
+                zorder=0,
                 **plt_kwargs,
             )
             pr = ax.contour(
@@ -216,7 +216,7 @@ class aste_map:
                 field[:, split_lon_idx:],
                 transform=ccrs.PlateCarree(),
                 levels=levels,
-                zorder=1,
+                zorder=0,
                 **plt_kwargs,
             )
         elif plot_type is None:
@@ -272,6 +272,7 @@ class aste_map:
             vmin = cbar_kwargs.get("vmin", pl.norm.vmin)
             vmax = cbar_kwargs.get("vmax", pl.norm.vmax)
             pad = cbar_kwargs.pop("pad", 0.1)
+            orientation = cbar_kwargs.pop("orientation", 'horizontal')
             default_ticks = np.linspace(vmin, vmax, 5)
             cbar_kwargs.setdefault("ticks", default_ticks)
 
@@ -283,7 +284,7 @@ class aste_map:
                 pl,
                 ax=ax,
                 shrink=0.8,
-                orientation="horizontal",
+                orientation=orientation,
                 pad=pad,
                 **cbar_kwargs
             )
@@ -498,7 +499,10 @@ def aste_orthographic(subplot_n = 1,
                       ymin = 0,
                       ymax = 80,
                       n = 20,
-                      figsize = None):
+                      figsize = None,
+                      landfacecolor='silver',
+                      manual_remove_gl_labels=True,
+                      ):
     # https://stackoverflow.com/questions/75586978/cartopy-labels-not-appearing-for-high-latitude-non-rectangular-projection/75587005#75587005
     # Create a figure with n rows and m columns of subplots
     if figsize is None:
@@ -520,21 +524,44 @@ def aste_orthographic(subplot_n = 1,
         ax.set_boundary(aoi, transform=ccrs.PlateCarree())
         
         # Colored Land Background
-        land = cf.NaturalEarthFeature('physical','land',scale='110m',facecolor='silver',lw=1,linestyle='--')
+        land = cf.NaturalEarthFeature('physical','land',scale='110m',facecolor=landfacecolor,lw=1,linestyle='--', zorder=1)
         ax.add_feature(land)
         
         ax.set_extent([xmin,xmax,0,90],crs=ccrs.PlateCarree())
     
         # Set gridlines to variable so you can manipulate them
-        gl = ax.gridlines(draw_labels=True,crs=ccrs.PlateCarree(),x_inline=False,y_inline=False, linestyle=':')
+        gl = ax.gridlines(draw_labels=True,crs=ccrs.PlateCarree(),x_inline=False,y_inline=False, linestyle=':', zorder=2)
         gl.xlocator = mticker.FixedLocator([-100, -80, -60, -40, -20, 0, 20])
         gl.ylocator = mticker.FixedLocator(range(0, 90, 20))
         gl.xformatter = LONGITUDE_FORMATTER
         gl.yformatter = LATITUDE_FORMATTER
-#        gl.ylabels_right = False
-        gl.top_labels = False
+        fig.canvas.draw()
+
         # can't figure out how to hide right latitude lines. See https://stackoverflow.com/questions/75597673/hide-right-side-axis-latitude-labels-for-high-latitude-non-rectangular-project
+        if manual_remove_gl_labels:
+            # Step 1: Collect all y-values for labels containing 'W', 'E', or '0°'
+            y_values = []
+            for label in gl._labels:
+                text = label.artist.get_text()
+                if 'W' in text or 'E' in text or text == '0°':
+                    y_values.append(label.artist.get_position()[1])  # Get the y-position of the label
+        
+            # Step 2: Get unique y-values
+            unique_y_values = list(set(y_values))
+        
+            # Step 3: Identify the top labels based on the unique y-values
+            for label in gl._labels:
+                text = label.artist.get_text()
+                x, y = label.artist.get_position()
+        
+                if 'W' in text or 'E' in text or text == '0°':
+                    # Determine if the label corresponds to a top y-value
+                    is_top = y in unique_y_values and y == max(unique_y_values)
+        
+                    if is_top:
+                        label.artist.remove()
 
     if subplot_n == 1 and subplot_m == 1:
         axes = axes[0]
     return fig, axes
+

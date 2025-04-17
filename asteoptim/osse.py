@@ -1,5 +1,7 @@
 import xmitgcm
 import os
+from ecco_v4_py.ecco_utils import get_llc_grid
+from ecco_v4_py.vector_calc import UEVNfromUXVY
 from smartcables import *
 from .dataset import *
 from .plot import aste_orthographic
@@ -25,11 +27,12 @@ class NatureRun:
             self._load_nr_bp()
         elif self.fld_type == 'psi':
             self._load_nr_psi()
+        elif self.fld_type[-2:] == 'bt':
+            self._load_nr_bt()
         else:
             raise ValueError("Unsupported field type")
     
     def _load_nr_bp(self):
-        aste_tiles = [1, 2, 6, 7, 10, 11]
         nr_list = []
         for face in aste_tiles:
             bp_face_paths = np.sort(glob.glob(self.nr_dir + f'*face{face:02d}*'))
@@ -45,6 +48,14 @@ class NatureRun:
         fld = xr.open_mfdataset(self.nr_dir + self.fld_fname).psi
         self.fld = fld.isel(tile=aste_tiles)
         self.fld['tile'] = np.arange(len(self.fld.tile))
+        self.fld_full = self.fld
+
+    def _load_nr_bt(self):
+        fldU = xr.open_dataset(self.nr_dir + f'U_{self.fld_type}.nc')[f'U_{self.fld_type}']
+        fldV = xr.open_dataset(self.nr_dir + f'V_{self.fld_type}.nc')[f'V_{self.fld_type}']
+        self.fldUV = [fldU, fldV]
+        self.fld = self.fldUV[0]
+        self.fld_full = self.fldUV[0]
 
 class ForecastModel:
     """Handles loading of the FM dataset."""
@@ -78,23 +89,24 @@ class ForecastModel:
         elif self.fld_type == 'psi':
             self.fld_type_str = '\psi'
             self._load_fm_psi()
+        elif self.fld_type == 'bt':
+            self.fld_type_str =  'vel_{bt}'
+            self._load_fm_bt()
         else:
             raise ValueError("Unsupported field type. Choose 'bp' or 'psi'.")
 
     def _load_fm_bp(self):
         """Load the BP field."""
         self.bpr = BPReader(self.run_dir, iternums=self.iternums, ecco_frequency=self.ecco_frequency)
-        fm_bp = self.bpr.ds[f'm_bp{self.ecco_frequency}_anom']
-
         if self.datetimes is not None:
-            fm_bp['time'] = self.datetimes
+            self.bpr.ds['time'] = self.datetimes
+        fm_bp = self.bpr.ds[f'm_bp{self.ecco_frequency}_anom']
 
         self.fld = fm_bp
 
     def _load_fm_psi(self):
         """Load or generate the PSI field."""
 
-        from pdb import set_trace;set_trace()
         # Generate default filename if not provided
         if self.fm_fld_fname is None:
             date_str = self.datetimes[0].strftime('%Y_%m') if self.datetimes is not None else 'unknown_date'
@@ -105,8 +117,8 @@ class ForecastModel:
         # Check if the file exists
         if os.path.exists(file_path):
             print(f'Loading existing file: {file_path}')
-            print('aaaa')
             fld = xr.open_dataset(file_path).psi
+            fld['time'] = self.datetimes
         else:
             print(f'File not found: {file_path}')
             print('Loading trsp diagnostics dataset')
@@ -131,6 +143,26 @@ class ForecastModel:
             print(f'Saved generated field to: {file_path}')
         self.fld = fld
 
+
+    def _load_fm_bt(self):
+        self.ds_trsp = open_asteoptimdataset(
+            self.run_dir,
+            grid_dir=os.path.join(self.run_dir, f'iter{self.iternums[0]:04d}/'),
+            optim_iters=self.iternums,
+            prefix=['trsp_3d_set1']
+        )
+
+        self.ds_trsp = self.ds_trsp.isel(time=slice(0, len(self.datetimes)))
+        self.ds_trsp['time'] = self.datetimes
+
+        U_bt = (self.ds_trsp.UVELMASS * self.ds_trsp.hFacW * self.ds_trsp.dyG * self.ds_trsp.drF).sum('k').compute()
+        V_bt = (self.ds_trsp.VVELMASS * self.ds_trsp.hFacS * self.ds_trsp.dxG * self.ds_trsp.drF).sum('k').compute()
+        grid_aste = get_llc_grid(self.ds_trsp, domain='aste')
+        UV_bt = UEVNfromUXVY(U_bt, V_bt, self.ds_trsp, grid_aste)
+
+        self.fldUV = UV_bt # convenient to store so you can load once and toggle between the two
+        self.fld = self.fldUV[0]
+
 class OSSE:
     """Handles the comparison of a single FM against the NR."""
     
@@ -145,6 +177,13 @@ class OSSE:
             self.nr.fld = self.nr.fld.resample(time=f'1{self.fm.freq_str}').mean()
 
         self.load_grid_ds()
+        self.compute_skill()
+
+    def toggle_uv(self, vel_str='U'):
+        print(f'OSSE fld is now {vel_str}')
+        vel_idx = int(vel_str == 'V')
+        self.nr.fld = self.nr.fldUV[vel_idx]
+        self.fm.fld = self.fm.fldUV[vel_idx]
         self.compute_skill()
 
     def load_grid_ds(self):
