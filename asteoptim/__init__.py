@@ -6,3 +6,7 @@ from .custom_plot import *
 from .uq import *
 from .ctrl_utils import *
 from .osse import *
+from .plot_misfit_ctrl import *
+from .plot_variability import *
+from .spg import *
+from .wind_bp_fw import *

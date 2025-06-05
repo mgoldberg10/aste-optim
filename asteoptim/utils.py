@@ -92,3 +92,12 @@ def get_aste_tracer_xr(data_array):
     aste_tracer = aste_tracer.reset_index('J', drop=True)
 
     return aste_tracer
+
+def get_fH(ds, g=9.81, tau=86164):
+    # coriolis
+    H = ds.Depth
+    lat = ds.YC
+    Omega = (2 * np.pi) / tau
+    lat_rad = (np.pi / 180) * lat  # convert latitude from degrees to radians
+    f = 2 * Omega * np.sin(lat_rad)
+    return f, H
