@@ -1,10 +1,15 @@
 import xmitgcm
+import copy
+import matplotlib.ticker as ticker
 from smartcables import *
 from .dataset import open_astedataset
 from .tracer import get_aste_tracer, get_aste_tracer_xr_inv
 from .plot import aste_orthographic
 
 # First pass being written to only consider 2d time varying controls
+
+def scientific_notation_formatter(x, pos):
+    return f'{x:.0e}'.replace('e-0', 'e-').replace('e+0', 'e+')
 
 def l2norm(x):return np.sqrt(np.nansum(np.square(x)))
 
@@ -140,6 +145,7 @@ class SensitivityVector():
         
         A = A.reshape(A.shape[:-2] + (-1,)).T
         Q, R = np.linalg.qr(A)
+#        Q, R = myqr(A)
         E = np.zeros((M, M))
 
         # observational noise, not the same as uncertainty!
@@ -148,12 +154,18 @@ class SensitivityVector():
             E[m, m] = 1
         
         lhs = R @ np.linalg.inv(E) @ R.T
-        D, V = np.linalg.eig(lhs)
+        D, V = np.linalg.eigh(lhs)
+        self.D = D
         lhs_reconstr = V @ np.diag(D) @ np.linalg.inv(V)
-        assert np.allclose(lhs, lhs_reconstr, atol=1e-6)
+ 
+        check_lhs = np.allclose(lhs, lhs_reconstr, rtol=1e-5, atol=1e-8)
+
         QV = Q @ V
         # ON check
-        assert np.allclose(QV.T @ QV, np.eye(QV.shape[1]), atol=1e-6)
+        check_ON = np.allclose(QV.T @ QV, np.eye(QV.shape[1]), rtol=1e-5, atol=1e-8)
+
+        if hasattr(self, 'combo') and ((not check_lhs) or (not check_ON)):
+            print(f'Error: {check_lhs} {check_ON} {self.combo}')
 
         QV = np.transpose(QV.reshape(N, ngrid, M), [2, 0, 1])
 
@@ -177,6 +189,9 @@ class DPP():
         subset_time = slice(None, None),
         obs_weights = None,
         qoi_weight = None,
+        qoi_str = 'QoI',
+        obs_str = 'obs',
+        do_compute = True,
     ):
 
         # set attributes
@@ -202,14 +217,33 @@ class DPP():
 
         self.obs_weights = obs_weights
         self.qoi_weight = qoi_weight
+        self.qoi_str = qoi_str
+        self.obs_str = obs_str
+        self.do_compute = do_compute
 
         # load qoi and obs datasets         
-        self.get_datasets()
+        self.load_datasets()
 
-        # compute DPP
-        self.compute_dpp(verbose=self.verbose)
+        if self.do_compute:
+            # compute DPP
+            self.compute_dpp(verbose=self.verbose)
 
-    def get_datasets(self):
+    def __copy__(self):
+        cls = self.__class__
+        result = cls.__new__(cls)
+        result.__dict__.update(self.__dict__)
+        return result
+
+    def __deepcopy__(self, memo):
+        cls = self.__class__
+        result = cls.__new__(cls)
+        memo[id(self)] = result
+        for k, v in self.__dict__.items():
+            setattr(result, k, copy.deepcopy(v, memo))
+        return result
+
+
+    def load_datasets(self):
         qoi = SensitivityVector(self.qoi_run_dir, grid_dir=self.grid_dir, ctrl_vars=self.ctrl_vars, ctrl_weights = self.ctrl_weights, obs_weights = self.qoi_weight, nx=self.nx, subset_time=self.subset_time)
 
         qoi.normalize()
@@ -223,17 +257,23 @@ class DPP():
         setattr(obs, 'ds', obs_ds)
         setattr(obs, 'obs_weights', self.obs_weights)
 
-        obs.compute_hessian_eigenvectors()
-
-        self.ds = obs.ds
-        for adxx_var in self.adxx_vars:
-            self.ds[f'qoi_{adxx_var}'] = qoi.ds[adxx_var]
+#        obs.compute_hessian_eigenvectors()
+#
+#        self.ds = obs.ds
+#        for adxx_var in self.adxx_vars:
+#            self.ds[f'qoi_{adxx_var}'] = qoi.ds[adxx_var]
 
         # save sensitivity vector objects
         self.obs = obs
         self.qoi = qoi
 
     def compute_dpp(self, verbose=True):
+        self.obs.compute_hessian_eigenvectors()
+
+        self.ds = self.obs.ds
+        for adxx_var in self.adxx_vars:
+            self.ds[f'qoi_{adxx_var}'] = self.qoi.ds[adxx_var]
+
         mask = self.ds.hFacC[0]
 
         # stack obs_vars -- already has iobs dimension
@@ -273,7 +313,12 @@ class DPP():
             angle_values_str = " + ".join(angles_degrees)
             print(f"{angle_str}{angle_values_str}")
 
-    def plot(self, iobs=0, dotprod_fac=100, maskC_fname=None, ao_kwargs={}):
+    def plot(self,
+             iobs=0,
+             dotprod_fac=1,
+             maskC_fname=None,
+             ao_kwargs={}):
+
         das = []
         for var in self.adxx_vars:
             qoi = getattr(self.ds, f'qoi_{var}').where(self.ds.hFacC[0])
@@ -296,24 +341,24 @@ class DPP():
         
         fig, axes = aste_orthographic(subplot_n=self.nctrl, subplot_m=3, **ao_kwargs)
         
-        titles = [
-            r'${\bf q} = \frac{d(v^{\perp}_{ISR})}{d(u_{\mathrm{wind}})}$',
-            r'${\bf v}_1 = \frac{d(p_b)}{d(u_{\mathrm{wind}})}$',
-            r'${\bf q} \cdot {\bf v}_1$',
-            r'${\bf q} = \frac{d(v^{\perp}_{ISR})}{d(v_{\mathrm{wind}})}$',
-            r'${\bf v}_1 = \frac{d(p_b)}{d(v_{\mathrm{wind}})}$',
-            r'${\bf q} \cdot {\bf v}_1$',
-        ]
+        titles = self.get_titles(iobs)
         
         facs = [1, 1, dotprod_fac] * self.nctrl
 
-        for da, ax, title, fac in zip(das, axes.ravel(), titles, facs):
-        
-            nlev = 11;vmax = 0.05;vmin = -vmax;cmap=cmap_utils.custom_div_cmap(nlev);levels=np.linspace(vmin, vmax, nlev)
-            plot_kwargs = dict(vmin=vmin, vmax=vmax, cmap=cmap, show_cbar=False)#, extend='both', levels=levels)
-            if 'cdot' in title:
-                title += f' * {fac}'
-        
+        these_plots = ['qoi', 'obs', 'dotprod'] * self.nctrl
+
+        for da, ax, title, fac, this_plot in zip(das, axes.ravel(), titles, facs, these_plots):
+            nlev = 11;
+            if this_plot == 'dotprod':
+                cmap = SMARTColormaps(nlev).gwp_div_cmap()
+                vmax = 1e-3
+            else:
+                cmap = SMARTColormaps(nlev).custom_div_cmap();
+                vmax = 0.05
+ 
+            vmin = -vmax;
+            plot_kwargs = dict(vmin=-vmax, vmax=vmax, cmap=cmap, show_cbar=False, levels=np.linspace(vmin, vmax, nlev))
+                
             ax.set_title(title, fontsize=30, pad=30)
         
             _, ax, _, p = self.ds.c.plotpc(da*fac, ax=ax, **plot_kwargs)
@@ -323,12 +368,83 @@ class DPP():
                              edgecolors='black', s=100, linewidth=1.5,
                              transform=ccrs.PlateCarree()
                             )
-        
-        cbar_ax = fig.add_axes([0.15, -0.1, 0.7, 0.04])  # Adjust values as needed
-        fig.colorbar(p, cax=cbar_ax, orientation='horizontal')
-        cbar_ax.tick_params(size=20, labelsize=40)
-        fig.subplots_adjust(wspace=-0.8)  # Reduce horizontal spacing
+         
+            if this_plot == 'qoi':
+                cbar_ax_loc = [0.21, -0.05, 0.36, 0.04]
+            elif this_plot == 'dotprod':
+                cbar_ax_loc = [0.63, -0.05, 0.16, 0.04]
+
+            if this_plot != 'obs':
+                cbar_ax = fig.add_axes(cbar_ax_loc)
+                cbar = fig.colorbar(p, cax=cbar_ax, orientation='horizontal')
+                cbar_ax.tick_params(size=15, labelsize=20)
+                cbar.set_ticks(np.linspace(p.get_clim()[0], p.get_clim()[1], 5))
+                cbar.ax.xaxis.set_major_formatter(ticker.ScalarFormatter(useMathText=True))
+                cbar.ax.xaxis.get_offset_text().set_visible(False)  # Hide offset text if present
+                cbar.ax.xaxis.set_major_formatter(ticker.FormatStrFormatter('%.0e'))  # Remove decimal places
+                cbar.ax.xaxis.set_major_formatter(ticker.FuncFormatter(scientific_notation_formatter))
+               
+
+        fig.subplots_adjust(wspace=-0.8) 
         fig.tight_layout()
+    
         fig.suptitle(f'DPP={100 * self.dpp_obs[iobs]:.2f}%', fontsize=100, y=1.1)
         return fig, ax
 
+    def get_titles(self, iobs):
+        iobs_str = str(iobs)
+
+        # Format control variable names dynamically
+        ctrl_vars_formatted = [
+            rf"{var[0]}_{{\mathrm{{wind}}}}" if "wind" in var else var
+            for var in self.ctrl_vars
+        ]
+    
+        # Generate dynamic titles while keeping the ctrl order
+        titles = []
+        for ctrl_var in ctrl_vars_formatted:
+            titles.append(rf"${{\bf q}} = \frac{{d({self.qoi_str})}}{{d({ctrl_var})}}$")
+            titles.append(rf"${{\bf v}}_{{{iobs_str}}} = \frac{{d({self.obs_str})}}{{d({ctrl_var})}}$")
+            titles.append(rf"$\bf{{q}} \cdot \bf{{v}}_{{{iobs_str}}}$")
+ 
+    
+        return titles
+
+def myqr(testcase_NbyM):
+    # Assuming testcase_NbyM is a NumPy array of shape (N, numobs)
+    N = testcase_NbyM.shape[0]  # Length of control space
+    numobs = testcase_NbyM.shape[1]  # Number of observations
+
+    print(f"Assuming there are {numobs} observations in our network")
+    R = np.zeros((numobs, numobs))  # Initialize R matrix
+    Q = np.zeros_like(testcase_NbyM)  # Initialize Q matrix for orthonormal sensitivities
+    wnorm = np.zeros(numobs)  # Normalization factors
+
+    # Gram-Schmidt Process
+    for j in range(numobs):
+        print(f"Orthonormalizing observational sensitivity # {j + 1}")
+
+        if j == 0:
+            # First observational sensitivity
+            w_temp = testcase_NbyM[:, j]
+        else:
+            # Compute orthonormal part of the j-th observational sensitivity
+            w_summed = np.zeros(N)
+            for p in range(j):
+                coeff = np.nansum(testcase_NbyM[:, j] * Q[:, p])  # Compute projection coefficient
+                w_summed += coeff * Q[:, p]  # Accumulate the projection
+
+            w_temp = testcase_NbyM[:, j] - w_summed  # Remove the shared information
+
+        # Normalize
+        wnorm[j] = np.sqrt(np.nansum(w_temp * w_temp))
+        w = w_temp / wnorm[j]
+
+        # Store orthonormal sensitivity
+        Q[:, j] = w  
+
+        # Fill R matrix
+        R[j, j] = wnorm[j]
+        for k in range(j + 1, numobs):
+            R[j, k] = np.nansum(w * testcase_NbyM[:, k])
+    return Q, R

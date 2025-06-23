@@ -29,6 +29,8 @@ class NatureRun:
             self._load_nr_psi()
         elif self.fld_type[-2:] == 'bt':
             self._load_nr_bt()
+        elif self.fld_type == 'fwflx':
+            self._load_nr_fwflx()
         else:
             raise ValueError("Unsupported field type")
     
@@ -54,6 +56,14 @@ class NatureRun:
         fldU = xr.open_dataset(self.nr_dir + f'U_{self.fld_type}.nc')[f'U_{self.fld_type}']
         fldV = xr.open_dataset(self.nr_dir + f'V_{self.fld_type}.nc')[f'V_{self.fld_type}']
         self.fldUV = [fldU, fldV]
+        self.fld = self.fldUV[0]
+        self.fld_full = self.fldUV[0]
+
+    def _load_nr_fwflx(self):
+        fld = xr.open_mfdataset(self.nr_dir + 'ADVen_FW_sumk.nc') # includes both ADV_FW components
+        self.fld = fld.isel(tile=aste_tiles)
+        self.fld['tile'] = np.arange(len(self.fld.tile))
+        self.fldUV = [self.fld.ADVe_FW, self.fld.ADVn_FW]
         self.fld = self.fldUV[0]
         self.fld_full = self.fldUV[0]
 
@@ -92,6 +102,9 @@ class ForecastModel:
         elif self.fld_type == 'bt':
             self.fld_type_str =  'vel_{bt}'
             self._load_fm_bt()
+        elif self.fld_type == 'fwflx':
+            self.fld_type_str =  'ADV_{FW}'
+            self._load_fm_fwflx()
         else:
             raise ValueError("Unsupported field type. Choose 'bp' or 'psi'.")
 
@@ -163,6 +176,46 @@ class ForecastModel:
         self.fldUV = UV_bt # convenient to store so you can load once and toggle between the two
         self.fld = self.fldUV[0]
 
+    def _load_fm_fwflx(self):
+
+        self.ds_trsp = open_asteoptimdataset(
+            self.run_dir,
+            grid_dir=os.path.join(self.run_dir, f'iter{self.iternums[0]:04d}/'),
+            optim_iters=self.iternums,
+            prefix=['trsp_3d_set1']
+        )
+
+        self.ds_state = open_asteoptimdataset(
+            self.run_dir,
+            grid_dir=os.path.join(self.run_dir, f'iter{self.iternums[0]:04d}/'),
+            optim_iters=self.iternums,
+            prefix=['state_3d_set1']
+        )
+
+        Sref = 34.8 # hard coded to match nr
+
+        self.ds_trsp = self.ds_trsp.isel(time=slice(0, len(self.datetimes)))
+        self.ds_trsp['time'] = self.datetimes
+        self.ds_state = self.ds_state.isel(time=slice(0, len(self.datetimes)))
+        self.ds_state['time'] = self.datetimes
+
+        grid_aste = get_llc_grid(self.ds_trsp, domain='aste')
+        S_at_u = grid_aste.interp(self.ds_state.SALT, 'X', boundary='extend')
+        S_at_v = grid_aste.interp(self.ds_state.SALT, 'Y', boundary='extend')
+
+        print('Computing ADVx_FW')
+#        self.ADVx_FW = (self.ds_trsp.UVELMASS * self.ds_trsp.hFacW * self.ds_trsp.dyG * self.ds_trsp.drF * (Sref - S_at_u)/Sref ).sum('k').compute()
+        self.ADVx_FW = (self.ds_trsp.UVELMASS * self.ds_trsp.dyG * self.ds_trsp.drF * (Sref - S_at_u)/Sref ).sum('k').compute()
+        print('Computing ADVy_FW')
+#        self.ADVy_FW = (self.ds_trsp.VVELMASS * self.ds_trsp.hFacS * self.ds_trsp.dxG * self.ds_trsp.drF * (Sref - S_at_v)/Sref ).sum('k').compute()
+        self.ADVy_FW = (self.ds_trsp.VVELMASS * self.ds_trsp.dxG * self.ds_trsp.drF * (Sref - S_at_v)/Sref ).sum('k').compute()
+
+        print('Compute UEVNfromUXVY')
+        ADVen = UEVNfromUXVY(self.ADVx_FW, self.ADVy_FW, self.ds_trsp, grid_aste)
+
+        self.fldUV = ADVen # convenient to store so you can load once and toggle between the two
+        self.fld = self.fldUV[0]
+
 class OSSE:
     """Handles the comparison of a single FM against the NR."""
     
@@ -190,11 +243,7 @@ class OSSE:
         self.grid_ds = open_astedataset(self.fm.grid_dir, grid_dir=self.fm.grid_dir, iters=None)
 
     def compute_skill(self):
-        fld_before = self.fm.fld.isel(ioptim=0).compute()
-        fld_after = self.fm.fld.isel(ioptim=-1).compute()
-        rms_before = compute_rms(fld_before, self.nr.fld, dim='time')
-        rms_after = compute_rms(fld_after, self.nr.fld, dim='time')
-        self.fld_skill = (1 - (rms_after / rms_before)).compute()
+        self.fld_skill = _compute_skill(self.fm.fld, self.nr.fld)
 
     def plot_skill(self, vmax_default=0.01, ao_kwargs=None, threshold_skill=None, fig=None, ax=None, **plot_kwargs):
         if ao_kwargs is None:
@@ -226,10 +275,34 @@ def compute_rms(da1, da2, dim, remove_means=True):
     diff = da1 - da2
     return np.sqrt((diff ** 2).mean(dim=dim))
 
+def _compute_skill(fm_fld, nr_fld):
+    fld_before = fm_fld.isel(ioptim=0).compute()
+    fld_after = fm_fld.isel(ioptim=-1).compute()
+    rms_before = compute_rms(fld_before, nr_fld, dim='time')
+    rms_after = compute_rms(fld_after, nr_fld, dim='time')
+    skill = (1 - (rms_after / rms_before)).compute()
+    return skill
 
-def _plot_skill(osse, vmax_default=0.01, ao_kwargs=None, threshold_skill=None, fig=None, ax=None, nlev=21, **plot_kwargs):
+def _plot_skill(osse, vmax_default=0.01, ao_kwargs=None, threshold_skill=None,
+                fig=None, ax=None, nlev=21, cable_scatter_kwargs=None, **plot_kwargs):
+    import matplotlib.pyplot as plt
+    import cmocean
+    import cartopy.crs as ccrs
+
     if ao_kwargs is None:
         ao_kwargs = {}
+
+    if cable_scatter_kwargs is None:
+        cable_scatter_kwargs = {}
+
+    # Define default scatter settings and update with user-provided ones
+    scatter_defaults = {
+        's': 10,
+        'edgecolor': 'k',
+        'facecolor': 'w',
+        'transform': ccrs.PlateCarree()
+    }
+    scatter_defaults.update(cable_scatter_kwargs)  # User overrides default
 
     fld_skill = osse.fld_skill
     if threshold_skill is not None:
@@ -237,16 +310,18 @@ def _plot_skill(osse, vmax_default=0.01, ao_kwargs=None, threshold_skill=None, f
 
     if ax is None:
         fig, ax = aste_orthographic(**ao_kwargs)
-    
+
     vmax = plot_kwargs.pop('vmax', vmax_default)
     vmin = -vmax
 
-    cmap = smart_cmaps.custom_div_cmap(nlev, template_cmap=cmocean.cm.curl_r)
+    cmap = SMARTColormaps(nlev).custom_div_cmap(template_cmap=cmocean.cm.curl_r)
 
     _, ax, cb, p = osse.grid_ds.c.plotpc(fld_skill, ax=ax, vmin=vmin, vmax=vmax, cmap=cmap, **plot_kwargs)
+
     if hasattr(osse.fm, 'bpr'):
         cable_lons, cable_lats = [osse.grid_ds[coord].isel(osse.fm.bpr.sensor_args).values for coord in ['XC', 'YC']]
-        ax.scatter(cable_lons, cable_lats, edgecolor='k', s=10, facecolor='w', transform=ccrs.PlateCarree())
+        ax.scatter(cable_lons, cable_lats, **scatter_defaults)
+
     ax.set_title(rf'${osse.fm.fld_type_str}$ skill', fontsize=30, pad=20)
     return fig, ax, cb, p
 

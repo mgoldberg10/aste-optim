@@ -273,6 +273,8 @@ class aste_map:
             vmax = cbar_kwargs.get("vmax", pl.norm.vmax)
             pad = cbar_kwargs.pop("pad", 0.1)
             orientation = cbar_kwargs.pop("orientation", 'horizontal')
+            ticklabel_format = cbar_kwargs.pop('ticklabel_format', '{:.2f}')
+
             default_ticks = np.linspace(vmin, vmax, 5)
             cbar_kwargs.setdefault("ticks", default_ticks)
 
@@ -290,7 +292,15 @@ class aste_map:
             )
             cb.set_label(cbar_label)
             cb.ax.tick_params(**cbar_ticks_params)
-            cb.set_ticklabels([f"{t:.2f}" for t in cbar_kwargs["ticks"]])
+
+            try:
+                if 'd' in ticklabel_format:
+                    cb.set_ticklabels([ticklabel_format.format(int(round(t))) for t in cbar_kwargs["ticks"]])
+                else:
+                    cb.set_ticklabels([ticklabel_format.format(t) for t in cbar_kwargs["ticks"]])
+            except Exception as e:
+                raise ValueError(f"Failed to format tick labels with '{ticklabel_format}': {e}")
+
         else:
             cb = None
         return ax, cb, pl, pr, split_lon_idx
@@ -501,14 +511,26 @@ def aste_orthographic(subplot_n = 1,
                       n = 20,
                       figsize = None,
                       landfacecolor='silver',
-                      manual_hide_gl_labels=True,
+                      manual_remove_gl_labels=True,
+                      projection = 'Mollweide',
+                      return_gl = False,
+                      gl = None,
+                      gl_dlon = 20,
+                      gl_dlat = 20,
                       ):
     # https://stackoverflow.com/questions/75586978/cartopy-labels-not-appearing-for-high-latitude-non-rectangular-projection/75587005#75587005
     # Create a figure with n rows and m columns of subplots
     if figsize is None:
         figsize = (10 * subplot_m, 6 * subplot_n)
-    fig, axes = plt.subplots(subplot_n, subplot_m, figsize=figsize, 
-                             subplot_kw={'projection': ccrs.Mollweide(central_longitude=(xmin + xmax) / 2)})
+    if projection == 'Mollweide':
+        subplot_kw = {'projection': ccrs.Mollweide(central_longitude=(xmin + xmax) / 2)}
+        extent = [xmin,xmax,0,90]
+    elif projection == 'LambertConformal':
+        subplot_kw = {'projection': ccrs.LambertConformal(central_longitude=(xmin + xmax) / 2, central_latitude=(ymin + ymax) / 2)}
+        extent = [xmin,xmax,ymin,ymax]
+    else:
+        raise ValueError(f"projection must be \'Mollweide\' or \'LambertConformal\'. Received {projection}")
+    fig, axes = plt.subplots(subplot_n, subplot_m, figsize=figsize, subplot_kw=subplot_kw)
 
     # Handle the case when there is only one subplot
     if subplot_n == 1 and subplot_m == 1:
@@ -527,44 +549,51 @@ def aste_orthographic(subplot_n = 1,
         land = cf.NaturalEarthFeature('physical','land',scale='110m',facecolor=landfacecolor,lw=1,linestyle='--', zorder=1)
         ax.add_feature(land)
         
+        ax.set_extent(extent, crs=ccrs.PlateCarree())
     
-        ax.set_extent([xmin,xmax,0,90],crs=ccrs.PlateCarree())
-        ax.set_extent([xmin,xmax,ymin,ymax],crs=ccrs.PlateCarree())
+#        return fig, ax, gl
         # Set gridlines to variable so you can manipulate them
         gl = ax.gridlines(draw_labels=True,crs=ccrs.PlateCarree(),x_inline=False,y_inline=False, linestyle=':', zorder=2)
-#        gl.xlocator = mticker.FixedLocator([-100, -80, -60, -40, -20, 0, 20])
-        gl.xlocator = mticker.FixedLocator(np.linspace(-180, 180, 19))
-#        gl.ylocator = mticker.FixedLocator(range(0, 90, 20))
-        gl.ylocator = mticker.FixedLocator(np.linspace(-90, 90, 10))
+        gl.xlocator = mticker.FixedLocator(range(-100, 20, gl_dlon))
+        gl.ylocator = mticker.FixedLocator(range(0, 90, gl_dlat))
         gl.xformatter = LONGITUDE_FORMATTER
         gl.yformatter = LATITUDE_FORMATTER
-        
         fig.canvas.draw()
 
         # can't figure out how to hide right latitude lines. See https://stackoverflow.com/questions/75597673/hide-right-side-axis-latitude-labels-for-high-latitude-non-rectangular-project
-        if manual_hide_gl_labels:
+        if manual_remove_gl_labels:
             # Step 1: Collect all y-values for labels containing 'W', 'E', or '0°'
             y_values = []
             for label in gl._labels:
                 text = label.artist.get_text()
                 if 'W' in text or 'E' in text or text == '0°':
                     y_values.append(label.artist.get_position()[1])  # Get the y-position of the label
-        
+
             # Step 2: Get unique y-values
             unique_y_values = list(set(y_values))
-        
+
             # Step 3: Identify the top labels based on the unique y-values
             for label in gl._labels:
                 text = label.artist.get_text()
                 x, y = label.artist.get_position()
-        
+
+                if gl_labels_horizontal:
+                    label.artist.set_rotation(0)
+
                 if 'W' in text or 'E' in text or text == '0°':
-                    # Determine if the label corresponds to a top y-value
-                    is_top = y in unique_y_values and y == max(unique_y_values)
-        
+                    # Determine if the label corresponds to a top y-value -- second check might not be rigorous
+                    is_top = y in unique_y_values and (abs(y - max(unique_y_values)) < .1 * max(unique_y_values))
+                    is_bottom = y in unique_y_values and (abs(y - min(unique_y_values)) < 0.1 * max(unique_y_values))
+
                     if is_top:
                         label.artist.set_visible(False)
+                    if is_bottom and gl_labels_horizontal:
+                        label.artist.set_position((x, y - 0.04 * abs(y)))
+
     if subplot_n == 1 and subplot_m == 1:
         axes = axes[0]
-    return fig, axes, gl
 
+    if return_gl:
+        return fig, axes, gl
+    else:
+        return fig, axes

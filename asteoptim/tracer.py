@@ -13,6 +13,25 @@ class AsteTracer:
     def __call__(self):
         return get_aste_tracer_xr(self._obj)
 
+@xr.register_dataarray_accessor('to_compact')
+class AsteCompact:
+    def __init__(self, xarray_obj):
+        self._obj = xarray_obj
+
+    def __call__(self):
+        return get_aste_xr_to_compact(self._obj)
+
+
+def get_aste_xr_to_compact(data_array):
+    data_array_tracer = data_array.at().values
+    nx = int(data_array_tracer.shape[1]/2)
+    nfx = [nx, 0, nx, int(2*nx/3), int(5*nx/3)]
+    nfy = [int(5*nx/3), 0, nx, nx, nx]
+    data_array_compact = aste_tracer2compact(data_array_tracer, nfx, nfy).squeeze()
+    data_array_compact = xr.DataArray(data_array_compact, dims=['j', 'i'])
+    return data_array_compact
+    
+
 
 def get_aste_tracer_xr(data_array):
     """

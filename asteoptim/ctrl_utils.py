@@ -51,11 +51,10 @@ def load_gentim2d_ds(run_dir, ctrl_vars, optim_iters=range(1, 2), ext='', thresh
 
     return ds
 
-def load_gentim2d_adxx_ds(run_dir, adxx_var):
+def load_gentim2d_adxx_ds(run_dir, adxx_var, iternum, extra_metadata):
     ds = xr.Dataset()
     adxx_path = f'{run_dir}/{adxx_var}'
-    iternum = int(run_dir.split('/')[-2][-4:])
-    meta = get_aste_file_metadata(adxx_path, iternum=iternum, dtype=np.dtype('>f4'))
+    meta = get_aste_file_metadata(adxx_path, iternum=iternum, dtype=np.dtype('>f4'), extra_metadata=extra_metadata)
     adxx = read_3d_llc_data(adxx_var, meta)
     ds[adxx_var] = adxx
     return ds
@@ -63,18 +62,22 @@ def load_gentim2d_adxx_ds(run_dir, adxx_var):
 def get_ctrl_relative_contributions(
         run_dir,
         grid_dir,
+        iternum=0,
         weight_dir=None,
         ctrl_vars=None,
+        ctrl_weights=None,
         verbose=False,
         do_plot=False,
         use_ADJ=False,
+        aste_extra_metadata={},
         ):
 
 
     # Try to intuit ctrl variables for this run
-    ctrl_vars = grep_ctrl(field='file', fname = f'{run_dir}/data.ctrl')
-    ctrl_vars = [x[3:] for x in ctrl_vars] # remove xx_
-    ctrl_weights = grep_ctrl(field='weight', fname = f'{run_dir}/data.ctrl')
+    if ctrl_vars is None:
+        ctrl_vars = grep_ctrl(field='file', fname = f'{run_dir}/data.ctrl')
+        ctrl_vars = [x[3:] for x in ctrl_vars] # remove xx_
+        ctrl_weights = grep_ctrl(field='weight', fname = f'{run_dir}/data.ctrl')
 
 
     if len(ctrl_vars)*len(ctrl_weights) == 0:
@@ -89,11 +92,11 @@ def get_ctrl_relative_contributions(
         for ctrl_var in ctrl_vars:
             if verbose: print(ctrl_var)
             prefix = f'ADJ{ctrl_var}'
-            ds = open_astedataset(run_dir, grid_dir=grid_dir, extra_variables=package_state_variables, prefix=prefix)
+            ds = open_astedataset(run_dir, grid_dir=grid_dir, extra_variables=package_state_variables, prefix=prefix, extra_metadata=aste_extra_metadata)
             if len(ds.data_vars) == 0:
                 # As of now, this makes the huge assumption that the variables has the same output frequency as the ADJ variables
                 print(f'Warning: ctrl_var {ctrl_var} not loaded using prefix={prefix}\nTrying adxx instead')
-                ds = load_gentim2d_adxx_ds(run_dir, adxx_var=f'adxx_{ctrl_var}')
+                ds = load_gentim2d_adxx_ds(run_dir, adxx_var=f'adxx_{ctrl_var}', iternum=iternum, extra_metadata=aste_extra_metadata)
                 ds = ds.rename({f'adxx_{ctrl_var}':f'ADJ{ctrl_var}'})
                 print(f'Warning: Removing records from adxx_{ctrl_var} to reconcile time axes')
     #            ds = ds.isel(time=slice(None, len(ds_list[-1].time)))
@@ -101,6 +104,7 @@ def get_ctrl_relative_contributions(
                 ds['time'] = ds_list[-1]['time'].values
     
             ds_list.append(ds)
+
         ds = xr.merge(ds_list).compute()
     
         grid = get_llc_grid(ds, domain='aste')
@@ -121,13 +125,13 @@ def get_ctrl_relative_contributions(
         for ctrl_var in ctrl_vars:
             if verbose: print(ctrl_var)
             adxx_var = f'adxx_{ctrl_var}'
-            ds = load_gentim2d_adxx_ds(run_dir, adxx_var=adxx_var)
+            ds = load_gentim2d_adxx_ds(run_dir, adxx_var=adxx_var, iternum=iternum, extra_metadata=aste_extra_metadata)
             ds_list.append(ds)
         ds = xr.merge(ds_list).compute()
 
     # Load weights, compute prior = 1/sqrt(weight)
     
-    meta_xc = get_aste_file_metadata(grid_dir+'XC', iternum=0, dtype=np.dtype('>f4'))
+    meta_xc = get_aste_file_metadata(grid_dir+'XC', iternum=0, dtype=np.dtype('>f4'), extra_metadata=aste_extra_metadata)
     ds_weight = xr.Dataset()
     for ctrl_var, ctrl_weight in zip(ctrl_vars, ctrl_weights):
         weight_fname = f'{weight_dir}/{ctrl_weight}'
