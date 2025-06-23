@@ -277,6 +277,7 @@ class aste_map:
 
             default_ticks = np.linspace(vmin, vmax, 5)
             cbar_kwargs.setdefault("ticks", default_ticks)
+            cbar_kwargs.setdefault("shrink", .8)
 
             if "ticks" not in cbar_kwargs:
                 cbar_kwargs["ticks"] = default_ticks
@@ -285,7 +286,6 @@ class aste_map:
             cb = plt.colorbar(
                 pl,
                 ax=ax,
-                shrink=0.8,
                 orientation=orientation,
                 pad=pad,
                 **cbar_kwargs
@@ -512,11 +512,13 @@ def aste_orthographic(subplot_n = 1,
                       figsize = None,
                       landfacecolor='silver',
                       manual_remove_gl_labels=True,
+                      gl_labels_horizontal=False,
                       projection = 'Mollweide',
                       return_gl = False,
                       gl = None,
                       gl_dlon = 20,
                       gl_dlat = 20,
+                      set_boundary=True,
                       ):
     # https://stackoverflow.com/questions/75586978/cartopy-labels-not-appearing-for-high-latitude-non-rectangular-projection/75587005#75587005
     # Create a figure with n rows and m columns of subplots
@@ -543,7 +545,8 @@ def aste_orthographic(subplot_n = 1,
         list(zip(np.full(n,xmin), np.linspace(ymin,ymax, n)))
     )
     for ax in axes.ravel():    
-        ax.set_boundary(aoi, transform=ccrs.PlateCarree())
+        if set_boundary:
+            ax.set_boundary(aoi, transform=ccrs.PlateCarree())
         
         # Colored Land Background
         land = cf.NaturalEarthFeature('physical','land',scale='110m',facecolor=landfacecolor,lw=1,linestyle='--', zorder=1)
@@ -554,8 +557,8 @@ def aste_orthographic(subplot_n = 1,
 #        return fig, ax, gl
         # Set gridlines to variable so you can manipulate them
         gl = ax.gridlines(draw_labels=True,crs=ccrs.PlateCarree(),x_inline=False,y_inline=False, linestyle=':', zorder=2)
-        gl.xlocator = mticker.FixedLocator(range(-100, 20, gl_dlon))
-        gl.ylocator = mticker.FixedLocator(range(0, 90, gl_dlat))
+        gl.xlocator = mticker.FixedLocator(range(-180, 180, gl_dlon))
+        gl.ylocator = mticker.FixedLocator(range(-90, 90, gl_dlat))
         gl.xformatter = LONGITUDE_FORMATTER
         gl.yformatter = LATITUDE_FORMATTER
         fig.canvas.draw()
@@ -579,12 +582,11 @@ def aste_orthographic(subplot_n = 1,
 
                 if gl_labels_horizontal:
                     label.artist.set_rotation(0)
-
+        
                 if 'W' in text or 'E' in text or text == '0°':
                     # Determine if the label corresponds to a top y-value -- second check might not be rigorous
                     is_top = y in unique_y_values and (abs(y - max(unique_y_values)) < .1 * max(unique_y_values))
                     is_bottom = y in unique_y_values and (abs(y - min(unique_y_values)) < 0.1 * max(unique_y_values))
-
                     if is_top:
                         label.artist.set_visible(False)
                     if is_bottom and gl_labels_horizontal:
