@@ -1,6 +1,8 @@
 import xarray as xr
 import numpy as np
 import dask.array as da
+from .tracer import *
+import smartcables
 
 def assign_coords_to_dataarray(data_array, i_dim, j_dim):
     """
@@ -92,3 +94,21 @@ def get_aste_tracer_xr(data_array):
     aste_tracer = aste_tracer.reset_index('J', drop=True)
 
     return aste_tracer
+
+def get_fH(ds, g=9.81, tau=86164):
+    # coriolis
+    H = ds.Depth
+    lat = ds.YC
+    Omega = (2 * np.pi) / tau
+    lat_rad = (np.pi / 180) * lat  # convert latitude from degrees to radians
+    f = 2 * Omega * np.sin(lat_rad)
+    return f, H
+
+def load_fld(run_dir, fname, nx=90, ny=450, nz=None):
+    """another way to load from compact to aste 6-tile"""
+    shape = (nz is not None) * (nz,) + (ny, nx)
+    fld = smartcables.utils.read_float32(run_dir + fname).reshape(shape)
+    fld = get_aste_tracer(fld, nx)[0]
+    fld = xr.DataArray(fld, dims=['J', 'I'])
+    fld = get_aste_tracer_xr_inv(fld)
+    return fld

@@ -501,7 +501,7 @@ def aste_orthographic(subplot_n = 1,
                       n = 20,
                       figsize = None,
                       landfacecolor='silver',
-                      manual_remove_gl_labels=True,
+                      manual_hide_gl_labels=True,
                       ):
     # https://stackoverflow.com/questions/75586978/cartopy-labels-not-appearing-for-high-latitude-non-rectangular-projection/75587005#75587005
     # Create a figure with n rows and m columns of subplots
@@ -527,18 +527,22 @@ def aste_orthographic(subplot_n = 1,
         land = cf.NaturalEarthFeature('physical','land',scale='110m',facecolor=landfacecolor,lw=1,linestyle='--', zorder=1)
         ax.add_feature(land)
         
-        ax.set_extent([xmin,xmax,0,90],crs=ccrs.PlateCarree())
     
+        ax.set_extent([xmin,xmax,0,90],crs=ccrs.PlateCarree())
+        ax.set_extent([xmin,xmax,ymin,ymax],crs=ccrs.PlateCarree())
         # Set gridlines to variable so you can manipulate them
         gl = ax.gridlines(draw_labels=True,crs=ccrs.PlateCarree(),x_inline=False,y_inline=False, linestyle=':', zorder=2)
-        gl.xlocator = mticker.FixedLocator([-100, -80, -60, -40, -20, 0, 20])
-        gl.ylocator = mticker.FixedLocator(range(0, 90, 20))
+#        gl.xlocator = mticker.FixedLocator([-100, -80, -60, -40, -20, 0, 20])
+        gl.xlocator = mticker.FixedLocator(np.linspace(-180, 180, 19))
+#        gl.ylocator = mticker.FixedLocator(range(0, 90, 20))
+        gl.ylocator = mticker.FixedLocator(np.linspace(-90, 90, 10))
         gl.xformatter = LONGITUDE_FORMATTER
         gl.yformatter = LATITUDE_FORMATTER
+        
         fig.canvas.draw()
 
         # can't figure out how to hide right latitude lines. See https://stackoverflow.com/questions/75597673/hide-right-side-axis-latitude-labels-for-high-latitude-non-rectangular-project
-        if manual_remove_gl_labels:
+        if manual_hide_gl_labels:
             # Step 1: Collect all y-values for labels containing 'W', 'E', or '0°'
             y_values = []
             for label in gl._labels:
@@ -559,9 +563,8 @@ def aste_orthographic(subplot_n = 1,
                     is_top = y in unique_y_values and y == max(unique_y_values)
         
                     if is_top:
-                        label.artist.remove()
-
+                        label.artist.set_visible(False)
     if subplot_n == 1 and subplot_m == 1:
         axes = axes[0]
-    return fig, axes
+    return fig, axes, gl
 
