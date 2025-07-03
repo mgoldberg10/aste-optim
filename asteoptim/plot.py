@@ -599,3 +599,19 @@ def aste_orthographic(subplot_n = 1,
         return fig, axes, gl
     else:
         return fig, axes
+
+def aste_lambertconformal_square(**kwargs):
+    default_args = {
+        'projection': 'LambertConformal',
+        'set_boundary': False,
+        'gl_dlat': 10,
+        'ymin': 40,
+        'xmin': -80,
+        'xmax': 10,
+        'ymax': 80,
+        'gl_labels_horizontal': True
+    }
+    # Let kwargs override defaults
+    default_args.update(kwargs)
+
+    return aste_orthographic(**default_args)
