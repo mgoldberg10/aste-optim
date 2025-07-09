@@ -513,6 +513,8 @@ def aste_orthographic(subplot_n = 1,
                       landfacecolor='silver',
                       manual_remove_gl_labels=True,
                       gl_labels_horizontal=False,
+                      hide_east_gl_labels=True,
+                      gl_fontsize=20,
                       projection = 'Mollweide',
                       return_gl = False,
                       gl = None,
@@ -532,6 +534,9 @@ def aste_orthographic(subplot_n = 1,
         extent = [xmin,xmax,ymin,ymax]
     else:
         raise ValueError(f"projection must be \'Mollweide\' or \'LambertConformal\'. Received {projection}")
+
+    gl_list = []
+
     fig, axes = plt.subplots(subplot_n, subplot_m, figsize=figsize, subplot_kw=subplot_kw)
 
     # Handle the case when there is only one subplot
@@ -584,23 +589,213 @@ def aste_orthographic(subplot_n = 1,
                     label.artist.set_rotation(0)
         
                 if 'W' in text or 'E' in text or text == '0°':
+
                     # Determine if the label corresponds to a top y-value -- second check might not be rigorous
                     is_top = y in unique_y_values and (abs(y - max(unique_y_values)) < .1 * max(unique_y_values))
                     is_bottom = y in unique_y_values and (abs(y - min(unique_y_values)) < 0.1 * max(unique_y_values))
                     if is_top:
                         label.artist.set_visible(False)
-                    if is_bottom and gl_labels_horizontal:
+                    if is_bottom:
                         label.artist.set_position((x, y - 0.04 * abs(y)))
+                        if gl_xlabels_horizontal:
+                            label.artist.set_rotation(0) # maybe should make this optional?
+
+                # Remove labels near the right (East) edge of the plot
+                x_values = [label.artist.get_position()[0] for label in gl._labels if '°' in label.artist.get_text()]
+                max_x = max(x_values)
+                
+                if abs(x - max_x) < 0.1 * abs(max_x):
+                    label.artist.set_visible(False)
+
+ 
+            # Step 4: increase fontsize
+            for label in gl._labels:
+                text = label.artist.get_text()
+                label.artist.set_fontsize(gl_fontsize)
+
+        gl_list.append(gl)
 
     if subplot_n == 1 and subplot_m == 1:
         axes = axes[0]
 
     if return_gl:
-        return fig, axes, gl
+        return fig, axes, gl_list
     else:
         return fig, axes
 
-def aste_lambertconformal_square(**kwargs):
+
+def process_gridline_labels(gl, label_args):
+    plt.gcf().canvas.draw()
+
+    labels = gl._labels
+    x_positions = [lbl.artist.get_position()[0] for lbl in labels if '°' in lbl.artist.get_text()]
+    y_positions = [lbl.artist.get_position()[1] for lbl in labels if '°' in lbl.artist.get_text()]
+    max_x = max(x_positions) if x_positions else None
+    min_x = min(x_positions) if x_positions else None
+    max_y = max(y_positions) if y_positions else None
+    min_y = min(y_positions) if y_positions else None
+
+    x_range = (max_x - min_x) if max_x is not None and min_x is not None else 1
+    y_range = (max_y - min_y) if max_y is not None and min_y is not None else 1
+
+    for label in labels:
+        artist = label.artist
+        text = artist.get_text()
+        x, y = artist.get_position()
+
+        # First try to determine direction by the text content
+        direction = None
+        if 'E' in text or 'W' in text:
+            # Longitude labels → likely top or bottom
+            # Determine if top or bottom by proximity to max_y or min_y
+            if max_y is not None and abs(y - max_y) < 0.1 * y_range:
+                direction = 'top'
+            elif min_y is not None and abs(y - min_y) < 0.1 * y_range:
+                direction = 'bottom'
+        elif 'N' in text or 'S' in text:
+            # Latitude labels → likely left or right
+            if max_x is not None and abs(x - max_x) < 0.1 * x_range:
+                direction = 'right'
+            elif min_x is not None and abs(x - min_x) < 0.1 * x_range:
+                direction = 'left'
+
+        # If still no direction from text, fallback to your previous positional logic:
+        # Note, this can be troublesome in some edge cases
+        # It is possible for a label to meet multiple criteria, in which case the first
+        # condition below will determine the direction
+        if direction is None:
+            threshold = 0.1
+            if min_y is not None and abs(y - min_y) < threshold * y_range:
+                direction = 'bottom'
+            elif max_y is not None and abs(y - max_y) < threshold * y_range:
+                direction = 'top'
+            elif max_x is not None and abs(x - max_x) < threshold * x_range:
+                direction = 'right'
+            elif min_x is not None and abs(x - min_x) < threshold * x_range:
+                direction = 'left'
+
+        if direction is None:
+            # Could not classify direction, skip this label
+            continue
+
+        opts = label_args.get(direction, {})
+        pad_value = opts.get('pad', 0)  # could be False, 0, or a number
+        
+        if opts.get('hide', False):
+            artist.set_visible(False)
+        if opts.get('rotate', False):
+            artist.set_rotation(0)
+        if pad_value:
+            if pad_value is True:
+                pad_value = 0.04  # default pad amount
+            if direction == 'bottom':
+                artist.set_position((x, y - pad_value * abs(y)))
+            elif direction == 'top':
+                artist.set_position((x, y + pad_value * abs(y)))
+            elif direction == 'left':
+                artist.set_position((x - pad_value * abs(x), y))
+            elif direction == 'right':
+                artist.set_position((x + pad_value * abs(x), y))
+
+        artist.set_fontsize(label_args.get('fontsize', 20))
+
+
+
+def gl_label_defaults(fontsize=20):
+    return {
+        'top':    {'hide': True,  'rotate': False, 'pad': 0.0},
+        'bottom': {'hide': False, 'rotate': True,  'pad': -0.04},
+        'left':   {'hide': False, 'rotate': False, 'pad': 0.0},
+        'right':  {'hide': True,  'rotate': False, 'pad': 0.0, 'threshold': 0.2},
+    }
+
+def aste_cartopy(subplot_n=1,
+                 subplot_m=1,
+                 xmin=-100,
+                 xmax=30,
+                 ymin=0,
+                 ymax=80,
+                 n=20,
+                 figsize=None,
+                 landfacecolor='silver',
+                 manual_remove_gl_labels=True,
+                 projection='Mollweide',
+                 return_gl=False,
+                 gl=None,
+                 gl_dlon=20,
+                 gl_dlat=20,
+                 set_boundary=True,
+                 gl_label_args=None,
+                 ):
+    if figsize is None:
+        figsize = (10 * subplot_m, 6 * subplot_n)
+
+    if projection == 'Mollweide':
+        subplot_kw = {'projection': ccrs.Mollweide(central_longitude=(xmin + xmax) / 2)}
+        extent = [xmin, xmax, 0, 90]
+    elif projection == 'LambertConformal':
+        subplot_kw = {'projection': ccrs.LambertConformal(central_longitude=(xmin + xmax) / 2,
+                                                           central_latitude=(ymin + ymax) / 2)}
+        extent = [xmin, xmax, ymin, ymax]
+    else:
+        raise ValueError(f"projection must be 'Mollweide' or 'LambertConformal'. Received {projection}")
+
+    fig, axes = plt.subplots(subplot_n, subplot_m, figsize=figsize, subplot_kw=subplot_kw)
+
+    if subplot_n == 1 and subplot_m == 1:
+        axes = np.array([axes])  # Make axes iterable
+
+    gl_list = []
+
+    aoi = mpath.Path(
+        list(zip(np.linspace(xmin, xmax, n), np.full(n, ymax))) +
+        list(zip(np.full(n, xmax), np.linspace(ymax, ymin, n))) +
+        list(zip(np.linspace(xmax, xmin, n), np.full(n, ymin))) +
+        list(zip(np.full(n, xmin), np.linspace(ymin, ymax, n)))
+    )
+
+    for ax in axes.ravel():
+        if set_boundary:
+            ax.set_boundary(aoi, transform=ccrs.PlateCarree())
+
+        land = cf.NaturalEarthFeature('physical', 'land', scale='110m',
+                                      facecolor=landfacecolor, lw=1, linestyle='--', zorder=1)
+        ax.add_feature(land)
+
+        ax.set_extent(extent, crs=ccrs.PlateCarree())
+
+        gl = ax.gridlines(draw_labels=True,
+                          crs=ccrs.PlateCarree(),
+                          x_inline=False,
+                          y_inline=False,
+                          linestyle=':',
+                          zorder=2)
+        gl.xlocator = mticker.FixedLocator(range(-180, 180, gl_dlon))
+        gl.ylocator = mticker.FixedLocator(range(-90, 90, gl_dlat))
+        gl.xformatter = LONGITUDE_FORMATTER
+        gl.yformatter = LATITUDE_FORMATTER
+
+        if manual_remove_gl_labels:
+            if gl_label_args is None:
+                gl_label_args = gl_label_defaults()
+        
+            # Ensure we don't mutate the input dictionary
+            merged_label_args = gl_label_defaults()
+            merged_label_args.update(gl_label_args)
+        
+            process_gridline_labels(gl, label_args=merged_label_args)
+        gl_list.append(gl)
+
+    if subplot_n == 1 and subplot_m == 1:
+        axes = axes[0]
+
+    if return_gl:
+        return fig, axes, gl_list
+    else:
+        return fig, axes
+
+def aste_cartopy_lc(**kwargs):
+    """Square LambertConformal plot"""
     default_args = {
         'projection': 'LambertConformal',
         'set_boundary': False,
@@ -609,9 +804,11 @@ def aste_lambertconformal_square(**kwargs):
         'xmin': -80,
         'xmax': 10,
         'ymax': 80,
-        'gl_labels_horizontal': True
+        'gl_label_args' : dict(
+            bottom=dict(threshold=0.0001, rotate=True, pad=.1),
+        )
     }
     # Let kwargs override defaults
     default_args.update(kwargs)
 
-    return aste_orthographic(**default_args)
+    return aste_cartopy(**default_args)
